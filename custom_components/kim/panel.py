@@ -11,12 +11,12 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
-PANEL_URL = "/kim"
+PANEL_URL = "/kim_frontend"
 MODULE = "kim-panel.js"
 
 
 async def async_register_frontend(hass: HomeAssistant, version: str) -> None:
-    """Serve ``frontend/`` under ``/kim`` and add the sidebar panel."""
+    """Serve ``frontend/`` under ``/kim_frontend`` (panel route ``/kim`` stays free)."""
     try:
         from homeassistant.components.http import StaticPathConfig
 

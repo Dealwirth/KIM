@@ -129,7 +129,7 @@ class KimPanel extends HTMLElement {
     this._built = true;
     const root = this.shadowRoot;
     root.innerHTML = `
-      <link rel="stylesheet" href="/kim/kim-panel.css">
+      <link rel="stylesheet" href="/kim_frontend/kim-panel.css">
       <div class="wrap">
         <div id="veil"></div>
         <canvas id="shards"></canvas>
