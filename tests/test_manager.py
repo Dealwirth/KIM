@@ -275,3 +275,30 @@ def test_extract_result_falls_back_to_any_agent_text():
     events = [{"source": "assistant", "text": "Die Antwort lautet 42."}]
     assert Manager._extract_result(events) == "Die Antwort lautet 42."
     assert Manager._extract_result([{"source": "user", "text": "nur prompt"}]) == "nur prompt"
+
+
+@pytest.mark.asyncio
+async def test_dead_worker_is_replaced_and_task_recovers(tmp_path):
+    """A vanished agent must not block the role; a fresh one takes over."""
+    roles = [
+        {"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 1}
+    ]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True, max_parallel=1)
+    await manager.start()
+
+    plan = await manager.submit("Baue Feature Z")
+    await manager.tick()
+    first = next(iter(manager.workers.values()))
+    # the agent's sandbox disappears mid-task
+    backend.dead.add(str(first.conversation_id))
+
+    for _ in range(manager.max_status_errors + 2):
+        await manager.tick()
+    assert first.worker_id not in manager.workers
+    assert len(backend.created) > 1
+
+    for _ in range(80):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    assert all(t.state == TASK_DONE for t in plan.tasks)

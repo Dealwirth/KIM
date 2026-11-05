@@ -70,6 +70,7 @@ class Worker:
     last_error: str | None = None
     completed_tasks: int = 0
     failed_tasks: int = 0
+    status_errors: int = 0
     sandbox_status: str | None = None
     last_result: str | None = None
 

@@ -82,6 +82,7 @@ class Manager:
         self.max_retries = max_retries
         self.lazy_pool = lazy_pool
         self.idle_worker_ttl = idle_worker_ttl
+        self.max_status_errors = 3
         self.on_event = on_event
 
         self.workers: dict[str, Worker] = {}
@@ -287,7 +288,7 @@ class Manager:
 
     def _detect_failures(self) -> None:
         now = time.time()
-        for worker in self.workers.values():
+        for worker in list(self.workers.values()):
             if worker.current_task_id is None:
                 continue
             if now - worker.last_heartbeat > self.stall_timeout and worker.state == STATE_WORKING:
@@ -302,6 +303,9 @@ class Manager:
         worker.last_error = reason
         self.scratchpad.post(KIND_LOG, worker.worker_id, f"Ausfall: {reason}")
         self._fire(EVENT_WORKER_OFFLINE, {"worker_id": worker.worker_id, "reason": reason})
+        # Drop the dead instance so a fresh one can take its place (failover).
+        if self.lazy_pool:
+            self.workers.pop(worker.worker_id, None)
         if task_id and task_id in self.tasks:
             self._requeue(self.tasks[task_id], reason)
 
@@ -419,8 +423,19 @@ class Manager:
             try:
                 status = await self.backend.get_status(worker)
             except Exception as err:  # noqa: BLE001
-                _LOGGER.warning("KIM: status of %s failed: %s", worker.worker_id, err)
+                worker.status_errors += 1
+                _LOGGER.warning(
+                    "KIM: status of %s failed (%d): %s",
+                    worker.worker_id,
+                    worker.status_errors,
+                    err,
+                )
+                if worker.status_errors >= self.max_status_errors:
+                    self._fail_worker(
+                        worker, f"Agent dauerhaft nicht erreichbar: {err}"
+                    )
                 continue
+            worker.status_errors = 0
             state = status.get("state", worker.state)
             if state == STATE_DONE:
                 await self._complete_task(task, worker, status)

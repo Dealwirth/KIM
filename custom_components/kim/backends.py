@@ -403,6 +403,8 @@ class MockBackend(BaseBackend):
         self.created: list[Worker] = []
         self.prompts: dict[str, list[str]] = {}
         self._poll_counts: dict[str, int] = {}
+        # conversation ids that behave like a dead sandbox (status raises)
+        self.dead: set[str] = set()
 
     async def close(self) -> None:
         return None
@@ -424,6 +426,8 @@ class MockBackend(BaseBackend):
 
     async def get_status(self, worker: Worker) -> dict[str, Any]:
         cid = str(worker.conversation_id)
+        if cid in self.dead:
+            raise RuntimeError("mock sandbox gone")
         self._poll_counts[cid] = self._poll_counts.get(cid, 0) + 1
         if worker.role in self.fail_roles:
             return {"state": STATE_FAILED, "execution_status": "error"}
