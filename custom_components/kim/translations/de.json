@@ -6,18 +6,12 @@
         "description": "Konfiguriere die Agenten-Engine. Fuer einen ersten Test ohne Cloud nutze den Backend-Typ 'mock'.",
         "data": {
           "backend": "Backend",
-          "base_url": "Basis-URL",
-          "api_key": "API-Schluessel",
+          "api_key": "OpenHands API-Schluessel",
+          "base_url": "OpenHands Cloud Adresse",
+          "local_url": "Lokaler Agent-Server (optional)",
           "model": "Modell",
-          "repository": "Repository (optional)",
-          "branch": "Branch (optional)",
-          "workspace": "Arbeitsverzeichnis (lokal)",
           "max_parallel": "Max. parallele Agenten",
-          "heartbeat_timeout": "Heartbeat-Timeout (s)",
-          "stall_timeout": "Stillstands-Timeout (s)",
-          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen",
-          "idle_worker_ttl": "Agenten-Ruhestand nach (s)"
+          "archive_repo": "Archiv-Repository (optional, z. B. user/kim-archive)"
         }
       }
     },
@@ -36,18 +30,12 @@
         "title": "KIM Optionen",
         "data": {
           "backend": "Backend",
-          "base_url": "Basis-URL",
-          "api_key": "API-Schluessel",
+          "api_key": "OpenHands API-Schluessel",
+          "base_url": "OpenHands Cloud Adresse",
+          "local_url": "Lokaler Agent-Server (optional)",
           "model": "Modell",
-          "repository": "Repository (optional)",
-          "branch": "Branch (optional)",
-          "workspace": "Arbeitsverzeichnis (lokal)",
           "max_parallel": "Max. parallele Agenten",
-          "heartbeat_timeout": "Heartbeat-Timeout (s)",
-          "stall_timeout": "Stillstands-Timeout (s)",
-          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen",
-          "idle_worker_ttl": "Agenten-Ruhestand nach (s)"
+          "archive_repo": "Archiv-Repository (optional, z. B. user/kim-archive)"
         }
       }
     }
@@ -131,6 +119,23 @@
       "fields": {
         "task_id": {
           "name": "Aufgaben-ID"
+        }
+      }
+    },
+    "archive": {
+      "name": "Lauf archivieren",
+      "description": "Speichert den Lauf extern (GitHub) oder im begrenzten lokalen Speicher."
+    },
+    "archive_list": {
+      "name": "Archiv auflisten",
+      "description": "Listet gespeicherte Laeufe auf."
+    },
+    "archive_load": {
+      "name": "Lauf laden",
+      "description": "Laedt einen gespeicherten Lauf.",
+      "fields": {
+        "name": {
+          "name": "Laufname"
         }
       }
     }

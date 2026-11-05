@@ -7,23 +7,30 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
+
+import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .backends import create_backend
+from .backends import FailoverBackend, create_backend
 from .const import (
     ARTIFACT_DIR,
+    BACKEND_AUTO,
     BACKEND_MOCK,
     CONF_API_KEY,
+    CONF_ARCHIVE_REPO,
     CONF_BACKEND,
     CONF_BASE_URL,
     CONF_BRANCH,
     CONF_CLAIM_TTL,
     CONF_HEARTBEAT_TIMEOUT,
     CONF_IDLE_WORKER_TTL,
+    CONF_LOCAL_API_KEY,
+    CONF_LOCAL_URL,
     CONF_MAX_PARALLEL,
     CONF_MAX_RETRIES,
     CONF_MODEL,
@@ -41,6 +48,9 @@ from .const import (
     DEFAULT_STALL_TIMEOUT,
     DEFAULT_WORKSPACE,
     DOMAIN,
+    SERVICE_ARCHIVE,
+    SERVICE_ARCHIVE_LIST,
+    SERVICE_ARCHIVE_LOAD,
     SERVICE_CANCEL,
     SERVICE_COLLECT_ARTIFACTS,
     SERVICE_FETCH_FILE,
@@ -51,6 +61,7 @@ from .const import (
     SERVICE_SUBMIT,
     UPDATE_INTERVAL,
 )
+from .archive import ArchiveStore
 from .manager import Manager
 from .roles import RoleRegistry
 from .scratchpad import Scratchpad
@@ -66,15 +77,18 @@ class KimRuntime:
         self.manager: Manager | None = None
         self.coordinator: DataUpdateCoordinator[dict[str, Any]] | None = None
         self.scratchpad: Scratchpad | None = None
+        self.archive: ArchiveStore | None = None
 
     # ------------------------------------------------------------------
     def _build_manager(self) -> Manager:
         options = {**self.entry.data, **self.entry.options}
-        backend_type = options.get(CONF_BACKEND, BACKEND_MOCK)
+        backend_type = options.get(CONF_BACKEND, BACKEND_AUTO)
         backend = create_backend(
             backend_type,
             base_url=options.get(CONF_BASE_URL, DEFAULT_BASE_URL),
             api_key=options.get(CONF_API_KEY, ""),
+            local_url=options.get(CONF_LOCAL_URL, ""),
+            local_api_key=options.get(CONF_LOCAL_API_KEY, ""),
             workspace=options.get(CONF_WORKSPACE, DEFAULT_WORKSPACE),
             model=options.get(CONF_MODEL, DEFAULT_MODEL),
         )
@@ -84,6 +98,12 @@ class KimRuntime:
         registry = RoleRegistry(options.get(CONF_ROLES))
         # Cloud agents cost money and are only started when work arrives.
         lazy_pool = backend_type != BACKEND_MOCK
+        # Keep only the newest plans/notes in RAM; the full history is archived
+        # off-device (GitHub) so Home Assistant storage stays small.
+        self.archive = ArchiveStore(
+            repo=options.get(CONF_ARCHIVE_REPO, ""),
+            token=os.environ.get("GITHUB_TOKEN", ""),
+        )
 
         def on_event(event: str, data: dict[str, Any]) -> None:
             self.hass.bus.async_fire(event, data)
@@ -112,6 +132,14 @@ class KimRuntime:
         if self.scratchpad is not None:
             await self.hass.async_add_executor_job(self.scratchpad.wait_ready)
         await self.manager.start()
+        # Give the archive a shared HTTP session and a local fallback folder.
+        if self.archive is not None:
+            session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+            self._archive_session = session
+            self.archive.attach(session, self.hass.config.path(f".storage/{DOMAIN}_archive"))
+            entry_archive = self.entry.options.get(CONF_ARCHIVE_REPO) or self.entry.data.get(CONF_ARCHIVE_REPO)
+            if entry_archive:
+                self.archive.repo = str(entry_archive).strip().strip("/")
 
         self.coordinator = DataUpdateCoordinator(
             self.hass,
@@ -131,6 +159,9 @@ class KimRuntime:
             await self.manager.stop()
         if self.scratchpad is not None:
             await self.hass.async_add_executor_job(self.scratchpad.close)
+        session = getattr(self, "_archive_session", None)
+        if session is not None and not session.closed:
+            await session.close()
 
     async def _async_update(self) -> dict[str, Any]:
         assert self.manager is not None
@@ -178,6 +209,18 @@ class KimRuntime:
             data = await self._collect_artifacts(call.data["task_id"])
             self.hass.bus.async_fire(f"{DOMAIN}_artifact", data)
 
+        async def _archive(call: ServiceCall) -> None:
+            data = await self._archive_run()
+            self.hass.bus.async_fire(f"{DOMAIN}_archive", data)
+
+        async def _archive_list(call: ServiceCall) -> None:
+            data = await self._archive_list_runs()
+            self.hass.bus.async_fire(f"{DOMAIN}_archive_list", data)
+
+        async def _archive_load(call: ServiceCall) -> None:
+            data = await self._archive_load_run(call.data["name"])
+            self.hass.bus.async_fire(f"{DOMAIN}_archive_loaded", data)
+
         handlers = {
             SERVICE_SUBMIT: _submit,
             SERVICE_CANCEL: _cancel,
@@ -187,6 +230,9 @@ class KimRuntime:
             SERVICE_NOTE: _note,
             SERVICE_FETCH_FILE: _fetch_file,
             SERVICE_COLLECT_ARTIFACTS: _collect,
+            SERVICE_ARCHIVE: _archive,
+            SERVICE_ARCHIVE_LIST: _archive_list,
+            SERVICE_ARCHIVE_LOAD: _archive_load,
         }
         for name, handler in handlers.items():
             hass.services.async_register(DOMAIN, name, handler, schema=SCHEMAS[name])
@@ -221,6 +267,43 @@ class KimRuntime:
         dest = os.path.join(self._artifact_root(), target)
         await self.hass.async_add_executor_job(_write_bytes, dest, archive)
         return {"task_id": task_id, "saved": f"/local/kim/{target}", "bytes": len(archive)}
+
+    # ------------------------------------------------------------------
+    # off-device archive
+    # ------------------------------------------------------------------
+    def _run_payload(self) -> dict[str, Any]:
+        assert self.manager is not None
+        snap = self.manager.snapshot()
+        return {
+            "saved_at": snap.get("uptime"),
+            "backend": self._backend_status(),
+            "plans": snap.get("plans", []),
+            "notes": snap.get("notes", []),
+        }
+
+    def _backend_status(self) -> dict[str, Any]:
+        if isinstance(self.manager.backend, FailoverBackend):
+            return self.manager.backend.status()
+        return {"active": getattr(self.manager.backend, "backend", "?"), "chain": []}
+
+    async def _archive_run(self) -> dict[str, Any]:
+        if self.archive is None:
+            return {"ok": False, "error": "Archiv nicht verfuegbar"}
+        name = f"kim-run-{int(time.time())}"
+        result = await self.archive.save_run(name, self._run_payload())
+        result["name"] = name
+        return result
+
+    async def _archive_list_runs(self) -> dict[str, Any]:
+        if self.archive is None:
+            return {"runs": [], "target": "?"}
+        return {"runs": await self.archive.list_runs(), "target": self.archive.target}
+
+    async def _archive_load_run(self, name: str) -> dict[str, Any]:
+        if self.archive is None:
+            return {"ok": False, "error": "Archiv nicht verfuegbar"}
+        data = await self.archive.load_run(name)
+        return {"ok": data is not None, "name": name, "run": data}
 
 
 def _write_bytes(path: str, content: bytes) -> None:

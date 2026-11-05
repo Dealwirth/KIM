@@ -106,3 +106,25 @@ collect_artifacts:
       required: true
       selector:
         text:
+
+archive:
+  name: Lauf archivieren
+  description: >-
+    Speichert den aktuellen Lauf (Plan, Aufgaben, Ergebnisse, Notizzettel) im
+    externen Archiv. Ohne konfiguriertes GitHub-Repository wird ein begrenzter
+    lokaler Speicher genutzt, damit Home Assistant nicht volllaeuft.
+
+archive_list:
+  name: Archiv auflisten
+  description: Listet die gespeicherten Laeufe mit Groesse und Zielort auf.
+
+archive_load:
+  name: Lauf aus Archiv laden
+  description: Laedt einen gespeicherten Lauf zurueck, z. B. zur spaeteren Anzeige.
+  fields:
+    name:
+      name: Laufname
+      required: true
+      example: kim-run-1712345678
+      selector:
+        text:

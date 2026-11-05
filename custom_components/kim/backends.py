@@ -31,6 +31,24 @@ from .const import (
 from .models import Worker, new_id
 
 DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=60)
+
+# Marker strings that tell us a cloud sandbox could not be created because the
+# (free) quota is used up. Used to cool the cloud backend down and fall back.
+QUOTA_MARKERS = (
+    "sandbox limit",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "out of credits",
+    "insufficient",
+)
+
+
+def is_quota_error(err: object) -> bool:
+    text = str(err).lower()
+    return any(marker in text for marker in QUOTA_MARKERS)
+
+
 # Sandbox agent-server event stream (X-Session-API-Key).
 MESSAGE_ENDPOINT = "/api/conversations/{cid}/events"
 # Cloud app-server endpoints (Authorization: Bearer).
@@ -497,6 +515,109 @@ class MockBackend(BaseBackend):
         return b"PK\x03\x04mock-archive"
 
 
+# ---------------------------------------------------------------------------
+# Failover backend chain (free-first, keeps working at zero quota)
+# ---------------------------------------------------------------------------
+class FailoverBackend(BaseBackend):
+    """Drive agents through an ordered chain of backends.
+
+    Start attempts walk the chain from the cheapest/free option to the last
+    resort. When a backend reports a quota error it is put on cooldown and
+    skipped, so KIM keeps working with the next backend without hammering the
+    exhausted one. Existing workers remember which backend owns them.
+    """
+
+    def __init__(self, chain: list[tuple[str, BaseBackend]], *, cooldown: float = 3600.0) -> None:
+        super().__init__(session=None)
+        if not chain:
+            raise ValueError("failover backend needs at least one backend")
+        self.chain = chain
+        self.cooldown = cooldown
+        self._cooldown_until: dict[str, float] = {}
+        self._owner: dict[str, BaseBackend] = {}
+
+    # -- diagnostics ----------------------------------------------------
+    def status(self) -> dict[str, Any]:
+        """Which backend is active and which ones are cooling down."""
+        now = time.monotonic()
+        return {
+            "active": self._active_name(),
+            "chain": [name for name, _ in self.chain],
+            "cooldowns": {
+                name: round(max(0.0, until - now))
+                for name, until in self._cooldown_until.items()
+                if until > now
+            },
+        }
+
+    def _active_name(self) -> str:
+        now = time.monotonic()
+        for name, _ in self.chain:
+            if self._cooldown_until.get(name, 0.0) <= now:
+                return name
+        return self.chain[-1][0]
+
+    def _cool(self, name: str, seconds: float | None = None) -> None:
+        self._cooldown_until[name] = time.monotonic() + (seconds if seconds is not None else self.cooldown)
+
+    def _backend_for(self, worker: Worker) -> BaseBackend:
+        owner = self._owner.get(worker.worker_id)
+        if owner is not None:
+            return owner
+        name = getattr(worker, "backend", None)
+        for candidate_name, backend in self.chain:
+            if candidate_name == name:
+                self._owner[worker.worker_id] = backend
+                return backend
+        return self.chain[0][1]
+
+    async def close(self) -> None:
+        for _, backend in self.chain:
+            await backend.close()
+
+    # -- interface ------------------------------------------------------
+    async def start_worker(self, role, model, repository=None, branch=None) -> Worker:
+        last_error: Exception | None = None
+        for name, backend in self.chain:
+            if self._cooldown_until.get(name, 0.0) > time.monotonic():
+                continue
+            try:
+                worker = await backend.start_worker(role, model, repository, branch)
+            except Exception as err:  # noqa: BLE001 - try the next backend
+                last_error = err
+                if is_quota_error(err):
+                    self._cool(name)
+                continue
+            worker.backend = name
+            self._owner[worker.worker_id] = backend
+            return worker
+        if last_error is not None:
+            raise last_error
+        raise BackendError("alle Backends im Cooldown")
+
+    async def send_task(self, worker: Worker, prompt: str) -> None:
+        await self._backend_for(worker).send_task(worker, prompt)
+
+    async def get_status(self, worker: Worker) -> dict[str, Any]:
+        return await self._backend_for(worker).get_status(worker)
+
+    async def is_ready(self, worker: Worker) -> bool:
+        return await self._backend_for(worker).is_ready(worker)
+
+    async def read_events(self, worker: Worker, limit: int = 20) -> list[dict[str, Any]]:
+        return await self._backend_for(worker).read_events(worker, limit)
+
+    async def fetch_file(self, worker: Worker, path: str) -> bytes:
+        return await self._backend_for(worker).fetch_file(worker, path)
+
+    async def fetch_archive(self, worker: Worker) -> bytes:
+        return await self._backend_for(worker).fetch_archive(worker)
+
+    async def stop_worker(self, worker: Worker) -> None:
+        backend = self._owner.pop(worker.worker_id, None) or self._backend_for(worker)
+        await backend.stop_worker(worker)
+
+
 def create_backend(backend_type: str, **kwargs) -> BaseBackend:
     if backend_type == BACKEND_CLOUD:
         return CloudBackend(kwargs["base_url"], kwargs["api_key"])
@@ -512,4 +633,33 @@ def create_backend(backend_type: str, **kwargs) -> BaseBackend:
             completion_delay=int(kwargs.get("completion_delay", 1)),
             fail_roles=kwargs.get("fail_roles"),
         )
+    if backend_type == BACKEND_AUTO:
+        return create_failover_backend(**kwargs)
     raise ValueError(f"unknown backend: {backend_type}")
+
+
+def create_failover_backend(
+    *,
+    base_url: str,
+    api_key: str,
+    local_url: str = "",
+    local_api_key: str = "",
+    workspace: str = "/workspace",
+    model: str = "openhands/deepseek-v4.1-flash",
+    cooldown: float = 3600.0,
+) -> "FailoverBackend":
+    """Build the free-first backend chain: Cloud -> Local -> Mock.
+
+    Cloud is used while its free sandbox quota lasts; once it is exhausted the
+    chain degrades to a local agent server and finally to the offline mock, so
+    the whole orchestration keeps working even with no quota and no network.
+    """
+    chain: list[tuple[str, BaseBackend]] = []
+    if base_url and api_key:
+        chain.append((BACKEND_CLOUD, CloudBackend(base_url, api_key)))
+    if local_url:
+        chain.append(
+            (BACKEND_LOCAL, LocalBackend(local_url, local_api_key, workspace=workspace, model=model))
+        )
+    chain.append((BACKEND_MOCK, MockBackend()))
+    return FailoverBackend(chain, cooldown=cooldown)

@@ -634,7 +634,17 @@ class Manager:
             "plans": [p.to_dict() for p in self.plans.values()],
             "notes": [n.to_dict() for n in self._visible_notes(25)],
             "uptime": time.time() - self.started_at,
+            "backend": self._backend_status(),
         }
+
+    def _backend_status(self) -> dict[str, Any]:
+        status = getattr(self.backend, "status", None)
+        if callable(status):
+            try:
+                return status()
+            except Exception:  # noqa: BLE001 - diagnostics must never break the loop
+                return {}
+        return {"active": getattr(self.backend, "backend", "?"), "chain": []}
 
     def worker_by_id(self, worker_id: str) -> Worker | None:
         return self.workers.get(worker_id)

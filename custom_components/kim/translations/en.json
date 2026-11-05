@@ -3,21 +3,15 @@
     "step": {
       "user": {
         "title": "Set up KIM AI Manager",
-        "description": "Configure the agent engine. Use backend type 'mock' for a first offline test.",
+        "description": "Configure the agent engine. 'auto' (default) chains Cloud -> Local -> Mock so KIM keeps working for free even when the cloud quota runs out.",
         "data": {
           "backend": "Backend",
-          "base_url": "Base URL",
-          "api_key": "API key",
+          "api_key": "OpenHands API key",
+          "base_url": "OpenHands Cloud URL",
+          "local_url": "Local agent server (optional)",
           "model": "Model",
-          "repository": "Repository (optional)",
-          "branch": "Branch (optional)",
-          "workspace": "Working directory (local)",
           "max_parallel": "Max parallel agents",
-          "heartbeat_timeout": "Heartbeat timeout (s)",
-          "stall_timeout": "Stall timeout (s)",
-          "claim_ttl": "Claim TTL (s)",
-          "max_retries": "Max retries",
-          "idle_worker_ttl": "Retire agents after idle (s)"
+          "archive_repo": "Archive repository (optional, e.g. user/kim-archive)"
         }
       }
     },
@@ -36,18 +30,12 @@
         "title": "KIM options",
         "data": {
           "backend": "Backend",
-          "base_url": "Base URL",
-          "api_key": "API key",
+          "api_key": "OpenHands API key",
+          "base_url": "OpenHands Cloud URL",
+          "local_url": "Local agent server (optional)",
           "model": "Model",
-          "repository": "Repository (optional)",
-          "branch": "Branch (optional)",
-          "workspace": "Working directory (local)",
           "max_parallel": "Max parallel agents",
-          "heartbeat_timeout": "Heartbeat timeout (s)",
-          "stall_timeout": "Stall timeout (s)",
-          "claim_ttl": "Claim TTL (s)",
-          "max_retries": "Max retries",
-          "idle_worker_ttl": "Retire agents after idle (s)"
+          "archive_repo": "Archive repository (optional, e.g. user/kim-archive)"
         }
       }
     }
@@ -131,6 +119,23 @@
       "fields": {
         "task_id": {
           "name": "Task ID"
+        }
+      }
+    },
+    "archive": {
+      "name": "Archive run",
+      "description": "Store the run off-device (GitHub) or in bounded local storage."
+    },
+    "archive_list": {
+      "name": "List archive",
+      "description": "List stored runs."
+    },
+    "archive_load": {
+      "name": "Load run",
+      "description": "Load a stored run.",
+      "fields": {
+        "name": {
+          "name": "Run name"
         }
       }
     }

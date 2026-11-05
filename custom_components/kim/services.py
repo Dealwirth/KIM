@@ -11,6 +11,9 @@ import voluptuous as vol
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    SERVICE_ARCHIVE,
+    SERVICE_ARCHIVE_LIST,
+    SERVICE_ARCHIVE_LOAD,
     SERVICE_CANCEL,
     SERVICE_COLLECT_ARTIFACTS,
     SERVICE_FETCH_FILE,
@@ -49,6 +52,8 @@ FETCH_FILE_SCHEMA = vol.Schema(
 
 COLLECT_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
 
+ARCHIVE_LOAD_SCHEMA = vol.Schema({vol.Required("name"): cv.string})
+
 EMPTY_SCHEMA = vol.Schema({})
 
 SCHEMAS: dict[str, vol.Schema] = {
@@ -60,4 +65,7 @@ SCHEMAS: dict[str, vol.Schema] = {
     SERVICE_NOTE: NOTE_SCHEMA,
     SERVICE_FETCH_FILE: FETCH_FILE_SCHEMA,
     SERVICE_COLLECT_ARTIFACTS: COLLECT_SCHEMA,
+    SERVICE_ARCHIVE: EMPTY_SCHEMA,
+    SERVICE_ARCHIVE_LIST: EMPTY_SCHEMA,
+    SERVICE_ARCHIVE_LOAD: ARCHIVE_LOAD_SCHEMA,
 }

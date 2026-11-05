@@ -20,13 +20,18 @@ CONF_WORKSPACE = "workspace"
 CONF_MAX_RETRIES = "max_retries"
 CONF_ROLES = "roles"
 CONF_IDLE_WORKER_TTL = "idle_worker_ttl"
+CONF_LOCAL_URL = "local_url"
+CONF_LOCAL_API_KEY = "local_api_key"
+CONF_ARCHIVE_REPO = "archive_repo"
 
 # Backend types
 BACKEND_CLOUD = "cloud"
 BACKEND_LOCAL = "local"
 BACKEND_MOCK = "mock"
+# Automatic, free-first chain: Cloud -> Local -> Mock with quota cooldown.
+BACKEND_AUTO = "auto"
 
-BACKENDS = [BACKEND_CLOUD, BACKEND_LOCAL, BACKEND_MOCK]
+BACKENDS = [BACKEND_AUTO, BACKEND_CLOUD, BACKEND_LOCAL, BACKEND_MOCK]
 
 # Defaults
 DEFAULT_BASE_URL = "https://app.all-hands.dev"
@@ -73,6 +78,9 @@ SERVICE_RETRY = "retry"
 SERVICE_NOTE = "note"
 SERVICE_FETCH_FILE = "fetch_file"
 SERVICE_COLLECT_ARTIFACTS = "collect_artifacts"
+SERVICE_ARCHIVE = "archive"
+SERVICE_ARCHIVE_LIST = "archive_list"
+SERVICE_ARCHIVE_LOAD = "archive_load"
 
 # Where collected agent artifacts are published (HA serves /local/ from www/)
 ARTIFACT_DIR = "www/kim"
