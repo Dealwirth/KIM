@@ -405,6 +405,8 @@ class MockBackend(BaseBackend):
         self._poll_counts: dict[str, int] = {}
         # conversation ids that behave like a dead sandbox (status raises)
         self.dead: set[str] = set()
+        # when set, read_events only echoes the prompt (no agent answer)
+        self.echo_only = False
 
     async def close(self) -> None:
         return None
@@ -437,6 +439,12 @@ class MockBackend(BaseBackend):
 
     async def read_events(self, worker: Worker, limit: int = 20) -> list[dict[str, Any]]:
         cid = str(worker.conversation_id)
+        prompts = self.prompts.get(cid, [])
+        if self.echo_only:
+            return [
+                {"kind": "MessageEvent", "source": "user", "text": p}
+                for p in prompts
+            ][-limit:]
         return [
             {
                 "kind": "MessageEvent",
@@ -444,7 +452,7 @@ class MockBackend(BaseBackend):
                 "text": f"mock result for {worker.role}",
                 "prompt": p,
             }
-            for p in self.prompts.get(cid, [])
+            for p in prompts
         ][-limit:]
 
     async def fetch_file(self, worker: Worker, path: str) -> bytes:

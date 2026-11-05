@@ -107,6 +107,7 @@ class Task:
     updated_at: float = field(default_factory=_now)
     attempts: int = 0
     max_retries: int = 1
+    result_misses: int = 0
     run_id: str | None = None
 
     @property

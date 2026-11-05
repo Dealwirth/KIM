@@ -341,6 +341,24 @@ async def test_each_role_gets_its_own_agent(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_missing_answer_requeues_instead_of_faking_done(tmp_path):
+    """A 'finished' agent with no readable answer must not fake a result."""
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 1}]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True, max_parallel=1)
+    await manager.start()
+    backend.echo_only = True
+
+    plan = await manager.submit("Baue Feature W")
+    task = plan.tasks[0]
+    for _ in range(40):
+        await manager.tick()
+        if task.state in (TASK_DONE, TASK_FAILED):
+            break
+    assert task.state != TASK_DONE
+    assert task.attempts > 1
+
+
+@pytest.mark.asyncio
 async def test_dead_worker_is_replaced_and_task_recovers(tmp_path):
     """A vanished agent must not block the role; a fresh one takes over."""
     roles = [

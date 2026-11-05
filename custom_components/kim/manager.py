@@ -464,7 +464,23 @@ class Manager:
                 self._fail_worker(worker, f"Transkript nicht lesbar: {err}")
             return
         worker.result_errors = 0
-        result = self._extract_result(events, task.task_id) or "erledigt"
+        result = self._extract_result(events, task.task_id)
+
+        if result is None:
+            # The agent reports "finished" but we cannot find its answer for
+            # this task (e.g. a reused conversation). Never invent "erledigt";
+            # wait a little, then hand the task to another agent.
+            task.result_misses += 1
+            _LOGGER.warning(
+                "KIM: no answer for %s yet (miss %d)", task.task_id, task.result_misses
+            )
+            if task.result_misses >= 3:
+                task.result_misses = 0
+                worker.state = STATE_IDLE
+                worker.current_task_id = None
+                self._requeue(task, "Keine Agenten-Antwort gefunden")
+            return
+        task.result_misses = 0
 
         task.state = TASK_DONE
         task.result = result
