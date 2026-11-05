@@ -1,0 +1,13 @@
+{
+  "domain": "kim",
+  "name": "KIM - KI Manager",
+  "codeowners": ["@Dealwirth"],
+  "config_flow": true,
+  "documentation": "https://github.com/Dealwirth/KIM",
+  "issue_tracker": "https://github.com/Dealwirth/KIM/issues",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "dependencies": ["http", "conversation"],
+  "requirements": [],
+  "version": "0.1.0"
+}

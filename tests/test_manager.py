@@ -1,0 +1,213 @@
+"""Integration tests for the KIM manager using the mock backend."""
+from __future__ import annotations
+
+import pytest
+
+from custom_components.kim.backends import MockBackend
+from custom_components.kim.const import (
+    EVENT_TASK_DONE,
+    STATE_IDLE,
+    STATE_OFFLINE,
+    TASK_DONE,
+    TASK_FAILED,
+    TASK_IN_PROGRESS,
+    TASK_PENDING,
+)
+from custom_components.kim.manager import Manager
+from custom_components.kim.roles import RoleRegistry
+from custom_components.kim.scratchpad import Scratchpad
+
+
+def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
+                  fail_roles=None, events=None):
+    backend = MockBackend(completion_delay=completion_delay, fail_roles=fail_roles)
+    pad = Scratchpad(str(tmp_path / "notes.jsonl"))
+    registry = RoleRegistry(roles)
+    collected: list[tuple[str, dict]] = events if events is not None else []
+
+    def on_event(name, data):
+        collected.append((name, data))
+
+    manager = Manager(
+        backend,
+        pad,
+        registry=registry,
+        max_parallel=max_parallel,
+        heartbeat_timeout=1000,
+        stall_timeout=1000,
+        on_event=on_event,
+    )
+    return manager, backend, pad
+
+
+@pytest.mark.asyncio
+async def test_start_creates_worker_per_role_instance(tmp_path):
+    roles = [
+        {"name": "coder", "tags": ["code"], "instances": 2},
+        {"name": "tester", "tags": ["test"], "instances": 1},
+    ]
+    manager, backend, _ = build_manager(tmp_path, roles=roles)
+    await manager.start()
+    assert len(manager.workers) == 3
+    assert len(backend.created) == 3
+    assert manager.snapshot()["worker_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_submit_runs_plan_to_completion(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 2}]
+    manager, _, pad = build_manager(tmp_path, roles=roles, completion_delay=1)
+    await manager.start()
+    plan = await manager.submit("Baue Feature X")
+    assert len(plan.tasks) == 4
+
+    # drive the scheduler until every task is terminal
+    for _ in range(50):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+
+    assert all(t.state == TASK_DONE for t in plan.tasks)
+    results = pad.results()
+    assert len(results) == 4
+
+
+@pytest.mark.asyncio
+async def test_parallelism_limit_is_respected(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 5}]
+    # tasks only complete after 3 polls, so several stay in-flight at once
+    manager, _, _ = build_manager(tmp_path, roles=roles, max_parallel=2, completion_delay=3)
+    await manager.start()
+    await manager.submit("Grosses Ziel")
+
+    await manager.tick()
+    # never more than max_parallel workers busy
+    running = sum(1 for w in manager.workers.values() if w.current_task_id)
+    assert running <= 2
+
+    for _ in range(60):
+        await manager.tick()
+        running = sum(1 for w in manager.workers.values() if w.current_task_id)
+        assert running <= 2
+        if manager.snapshot()["tasks_pending"] == 0 and running == 0:
+            break
+
+
+@pytest.mark.asyncio
+async def test_dependencies_enforced(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 4}]
+    manager, _, _ = build_manager(tmp_path, roles=roles, max_parallel=4, completion_delay=2)
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    # first tick: only the first task (no deps) may be assigned
+    await manager.tick()
+    assigned = [t for t in plan.tasks if t.state in (TASK_IN_PROGRESS, TASK_DONE)]
+    assert len(assigned) == 1
+    assert assigned[0] is plan.tasks[0]
+
+
+@pytest.mark.asyncio
+async def test_failing_worker_requeues_then_fails(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 1}]
+    manager, _, _ = build_manager(
+        tmp_path, roles=roles, max_parallel=1, fail_roles=["coder"], completion_delay=1
+    )
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    for _ in range(20):
+        await manager.tick()
+        if plan.tasks[0].state == TASK_FAILED:
+            break
+    assert plan.tasks[0].state == TASK_FAILED
+    assert plan.tasks[0].attempts >= 1
+
+
+@pytest.mark.asyncio
+async def test_events_are_emitted(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 2}]
+    events: list[tuple[str, dict]] = []
+    manager, _, _ = build_manager(tmp_path, roles=roles, events=events)
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    for _ in range(50):
+        await manager.tick()
+        if all(t.state == TASK_DONE for t in plan.tasks):
+            break
+    done_events = [e for e in events if e[0] == EVENT_TASK_DONE]
+    assert len(done_events) == 4
+
+
+@pytest.mark.asyncio
+async def test_failover_on_offline_worker(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 1}]
+    manager, _, _ = build_manager(tmp_path, roles=roles, max_parallel=1, completion_delay=100)
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    await manager.tick()
+    task = plan.tasks[0]
+    assert task.state == TASK_IN_PROGRESS
+
+    # simulate the agent going silent past the heartbeat timeout
+    worker = manager.workers[task.assigned_to]
+    worker.last_heartbeat = 0
+    manager.heartbeat_timeout = 0  # force the timeout check to trigger
+    await manager.tick()
+
+    assert worker.state == STATE_OFFLINE
+    assert task.assigned_to is None
+    assert task.state in (TASK_PENDING, TASK_FAILED)
+
+
+@pytest.mark.asyncio
+async def test_pause_and_resume(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 1}]
+    manager, _, _ = build_manager(tmp_path, roles=roles)
+    await manager.start()
+    await manager.submit("Ziel")
+    manager.pause()
+    assert manager.snapshot()["paused"] is True
+    await manager.resume()
+    assert manager.snapshot()["paused"] is False
+
+
+@pytest.mark.asyncio
+async def test_cancel_task(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 1}]
+    manager, _, _ = build_manager(tmp_path, roles=roles, completion_delay=100)
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    await manager.tick()
+    task = plan.tasks[0]
+    assert await manager.cancel(task.task_id)
+    assert task.state == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_retry_failed_task(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review"], "instances": 1}]
+    manager, _, _ = build_manager(
+        tmp_path, roles=roles, max_parallel=1, fail_roles=["coder"], completion_delay=1
+    )
+    await manager.start()
+    plan = await manager.submit("Ziel")
+    for _ in range(20):
+        await manager.tick()
+        if plan.tasks[0].state == TASK_FAILED:
+            break
+    assert await manager.retry(plan.tasks[0].task_id)
+    assert plan.tasks[0].state in (TASK_PENDING, TASK_IN_PROGRESS, TASK_DONE)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_shape(tmp_path):
+    manager, _, _ = build_manager(tmp_path)
+    await manager.start()
+    snap = manager.snapshot()
+    for key in ("workers", "worker_count", "running_tasks", "max_parallel",
+                "tasks_total", "tasks_completed", "tasks_failed", "notes", "plans"):
+        assert key in snap
+    # session keys must never leak
+    for worker in snap["workers"]:
+        assert "session_api_key" not in worker
+    # heartbeats are noise and must not show up in the reported notes
+    assert all(n["kind"] != "heartbeat" for n in snap["notes"])

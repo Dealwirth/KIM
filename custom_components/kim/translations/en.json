@@ -1,0 +1,81 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "KIM KI-Manager einrichten",
+        "description": "Konfiguriere die Agenten-Engine. Fuer einen ersten Test ohne Cloud nutze den Backend-Typ 'mock'.",
+        "data": {
+          "backend": "Backend",
+          "base_url": "Basis-URL",
+          "api_key": "API-Schluessel",
+          "model": "Modell",
+          "repository": "Repository (optional)",
+          "branch": "Branch (optional)",
+          "workspace": "Arbeitsverzeichnis (lokal)",
+          "max_parallel": "Max. parallele Agenten",
+          "heartbeat_timeout": "Heartbeat-Timeout (s)",
+          "stall_timeout": "Stillstands-Timeout (s)",
+          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
+          "max_retries": "Max. Wiederholungen"
+        }
+      }
+    },
+    "error": {
+      "api_key_required": "Fuer das Cloud-Backend ist ein API-Schluessel erforderlich."
+    },
+    "abort": {
+      "already_configured": "KIM ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "KIM Optionen",
+        "data": {
+          "backend": "Backend",
+          "base_url": "Basis-URL",
+          "api_key": "API-Schluessel",
+          "model": "Modell",
+          "repository": "Repository (optional)",
+          "branch": "Branch (optional)",
+          "workspace": "Arbeitsverzeichnis (lokal)",
+          "max_parallel": "Max. parallele Agenten",
+          "heartbeat_timeout": "Heartbeat-Timeout (s)",
+          "stall_timeout": "Stillstands-Timeout (s)",
+          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
+          "max_retries": "Max. Wiederholungen"
+        }
+      }
+    }
+  },
+  "services": {
+    "submit": {
+      "name": "Aufgabe einreichen",
+      "description": "Zerlegt ein Ziel in Teilaufgaben und verteilt sie an die Agenten.",
+      "fields": {
+        "goal": {"name": "Ziel", "description": "Was die Agenten erledigen sollen."},
+        "title": {"name": "Titel", "description": "Optionaler Planname."},
+        "plan": {"name": "Plan (JSON)", "description": "Optionaler vorgefertigter Plan als JSON."}
+      }
+    },
+    "cancel": {
+      "name": "Aufgabe abbrechen",
+      "fields": {"task_id": {"name": "Aufgaben-ID"}}
+    },
+    "retry": {
+      "name": "Aufgabe wiederholen",
+      "fields": {"task_id": {"name": "Aufgaben-ID"}}
+    },
+    "pause": {"name": "Pausieren", "description": "Stoppt die Zuweisung neuer Aufgaben."},
+    "resume": {"name": "Fortsetzen", "description": "Setzt die Zuweisung fort."},
+    "note": {
+      "name": "Notiz schreiben",
+      "description": "Legt eine Nachricht auf dem gemeinsamen Notizzettel ab.",
+      "fields": {
+        "text": {"name": "Text"},
+        "author": {"name": "Autor"},
+        "task_id": {"name": "Aufgaben-ID (optional)"}
+      }
+    }
+  }
+}
