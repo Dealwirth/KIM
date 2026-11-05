@@ -276,7 +276,32 @@ def test_extract_result_ignores_the_prompt():
 def test_extract_result_falls_back_to_any_agent_text():
     events = [{"source": "assistant", "text": "Die Antwort lautet 42."}]
     assert Manager._extract_result(events) == "Die Antwort lautet 42."
-    assert Manager._extract_result([{"source": "user", "text": "nur prompt"}]) == "nur prompt"
+
+
+def test_extract_result_never_returns_our_own_prompt():
+    """Only agent-authored text counts; the task prompt is not a result."""
+    events = [{"source": "user", "text": "Arbeite die Aufgabe ab ... ERLEDIGT: <Ergebnis>"}]
+    assert Manager._extract_result(events) is None
+
+
+def test_extract_result_is_scoped_to_the_current_task():
+    """A reused conversation must not report the previous task's answer."""
+    events = [
+        {"source": "assistant", "text": "Antwort A"},
+        {"source": "user", "text": "Aufgabe (task_a): tu etwas"},
+        {"source": "assistant", "text": "alte Antwort B"},
+        {"source": "user", "text": "Aufgabe (task_b): tu anderes"},
+    ]
+    assert Manager._extract_result(events, "task_a") == "Antwort A"
+
+
+def test_extract_result_returns_none_when_only_stale_answers_exist():
+    """If the agent never answered the current task, report nothing."""
+    events = [
+        {"source": "user", "text": "Aufgabe (task_a): tu etwas"},
+        {"source": "assistant", "text": "alte Antwort B"},
+    ]
+    assert Manager._extract_result(events, "task_a") is None
 
 
 @pytest.mark.asyncio

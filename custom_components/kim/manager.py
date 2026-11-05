@@ -447,12 +447,24 @@ class Manager:
                 worker.current_task_id = None
 
     async def _complete_task(self, task: Task, worker: Worker, status: dict[str, Any]) -> None:
-        events: list[dict[str, Any]] = []
         try:
             events = await self.backend.read_events(worker, limit=20)
-        except Exception:  # noqa: BLE001 - events are best effort
-            pass
-        result = self._extract_result(events) or "erledigt"
+        except Exception as err:  # noqa: BLE001
+            # The agent's transcript is unreadable: it is probably gone. Do not
+            # mark the task done with a stale or empty result - fail the agent
+            # so the work is requeued on a fresh one.
+            worker.result_errors += 1
+            _LOGGER.warning(
+                "KIM: events of %s unreadable (%d): %s",
+                worker.worker_id,
+                worker.result_errors,
+                err,
+            )
+            if worker.result_errors >= self.max_status_errors:
+                self._fail_worker(worker, f"Transkript nicht lesbar: {err}")
+            return
+        worker.result_errors = 0
+        result = self._extract_result(events, task.task_id) or "erledigt"
 
         task.state = TASK_DONE
         task.result = result
@@ -469,33 +481,43 @@ class Manager:
         await self._maybe_finish_plan(task)
 
     @staticmethod
-    def _extract_result(events: list[dict[str, Any]]) -> str | None:
-        """Pull the agent's final answer out of a raw event list.
+    def _extract_result(
+        events: list[dict[str, Any]], task_id: str | None = None
+    ) -> str | None:
+        """Pull the agent's answer for the *current* task out of the events.
 
-        Events arrive newest-first. The task prompt we sent is itself a
-        ``user`` message that may contain the word "ERLEDIGT:", so only
-        agent-authored text counts as an answer.
+        Events arrive newest-first. A conversation is reused across tasks, so
+        the newest assistant message may belong to an earlier task. Our own
+        task prompt carries ``task_id``; everything newer than that prompt is
+        the answer we are waiting for.
         """
-        assistant_texts: list[str] = []
-        for event in events:
+        # Ignore everything at or before our own dispatch prompt.
+        if task_id:
+            marker = f"({task_id})"
+            cut = len(events)
+            for index, event in enumerate(events):
+                text = event.get("text")
+                if isinstance(text, str) and marker in text:
+                    cut = index
+                    break
+            scoped = events[:cut]
+        else:
+            scoped = events
+
+        agent_texts: list[str] = []
+        for event in scoped:
             source = str(event.get("source") or "").lower()
             text = event.get("text")
-            if source not in ("assistant", "agent") or not isinstance(text, str):
-                continue
-            text = text.strip()
-            if text:
-                assistant_texts.append(text)
+            if source in ("assistant", "agent") and isinstance(text, str):
+                stripped = text.strip()
+                if stripped:
+                    agent_texts.append(stripped)
 
-        for text in assistant_texts:
+        for text in agent_texts:
             if "ERLEDIGT:" in text:
                 return text.split("ERLEDIGT:", 1)[1].strip()[:2000]
-        if assistant_texts:
-            return assistant_texts[0][:2000]
-
-        for event in events:
-            text = event.get("text")
-            if isinstance(text, str) and text.strip():
-                return text.strip()[:2000]
+        if agent_texts:
+            return agent_texts[0][:2000]
         return None
 
     async def _maybe_finish_plan(self, task: Task) -> None:
