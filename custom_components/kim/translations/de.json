@@ -16,12 +16,15 @@
           "heartbeat_timeout": "Heartbeat-Timeout (s)",
           "stall_timeout": "Stillstands-Timeout (s)",
           "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen"
+          "max_retries": "Max. Wiederholungen",
+          "idle_worker_ttl": "Agenten-Ruhestand nach (s)"
         }
       }
     },
     "error": {
-      "api_key_required": "Fuer das Cloud-Backend ist ein API-Schluessel erforderlich."
+      "api_key_required": "Fuer das Cloud-Backend ist ein API-Schluessel erforderlich.",
+      "invalid_auth": "Der API-Schluessel wurde abgelehnt.",
+      "cannot_connect": "Verbindung zu OpenHands fehlgeschlagen."
     },
     "abort": {
       "already_configured": "KIM ist bereits eingerichtet."
@@ -43,7 +46,8 @@
           "heartbeat_timeout": "Heartbeat-Timeout (s)",
           "stall_timeout": "Stillstands-Timeout (s)",
           "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen"
+          "max_retries": "Max. Wiederholungen",
+          "idle_worker_ttl": "Agenten-Ruhestand nach (s)"
         }
       }
     }
@@ -53,28 +57,81 @@
       "name": "Aufgabe einreichen",
       "description": "Zerlegt ein Ziel in Teilaufgaben und verteilt sie an die Agenten.",
       "fields": {
-        "goal": {"name": "Ziel", "description": "Was die Agenten erledigen sollen."},
-        "title": {"name": "Titel", "description": "Optionaler Planname."},
-        "plan": {"name": "Plan (JSON)", "description": "Optionaler vorgefertigter Plan als JSON."}
+        "goal": {
+          "name": "Ziel",
+          "description": "Was die Agenten erledigen sollen."
+        },
+        "title": {
+          "name": "Titel",
+          "description": "Optionaler Planname."
+        },
+        "plan": {
+          "name": "Plan (JSON)",
+          "description": "Optionaler vorgefertigter Plan als JSON."
+        }
       }
     },
     "cancel": {
       "name": "Aufgabe abbrechen",
-      "fields": {"task_id": {"name": "Aufgaben-ID"}}
+      "fields": {
+        "task_id": {
+          "name": "Aufgaben-ID"
+        }
+      }
     },
     "retry": {
       "name": "Aufgabe wiederholen",
-      "fields": {"task_id": {"name": "Aufgaben-ID"}}
+      "fields": {
+        "task_id": {
+          "name": "Aufgaben-ID"
+        }
+      }
     },
-    "pause": {"name": "Pausieren", "description": "Stoppt die Zuweisung neuer Aufgaben."},
-    "resume": {"name": "Fortsetzen", "description": "Setzt die Zuweisung fort."},
+    "pause": {
+      "name": "Pausieren",
+      "description": "Stoppt die Zuweisung neuer Aufgaben."
+    },
+    "resume": {
+      "name": "Fortsetzen",
+      "description": "Setzt die Zuweisung fort."
+    },
     "note": {
       "name": "Notiz schreiben",
       "description": "Legt eine Nachricht auf dem gemeinsamen Notizzettel ab.",
       "fields": {
-        "text": {"name": "Text"},
-        "author": {"name": "Autor"},
-        "task_id": {"name": "Aufgaben-ID (optional)"}
+        "text": {
+          "name": "Text"
+        },
+        "author": {
+          "name": "Autor"
+        },
+        "task_id": {
+          "name": "Aufgaben-ID (optional)"
+        }
+      }
+    },
+    "fetch_file": {
+      "name": "Datei vom Agenten holen",
+      "description": "Holt eine einzelne Datei aus dem Arbeitsbereich nach /local/kim/.",
+      "fields": {
+        "task_id": {
+          "name": "Aufgaben-ID"
+        },
+        "path": {
+          "name": "Pfad"
+        },
+        "save_as": {
+          "name": "Speichern als"
+        }
+      }
+    },
+    "collect_artifacts": {
+      "name": "Alle Ergebnisse holen",
+      "description": "Laedt den kompletten Arbeitsbereich als ZIP nach /local/kim/.",
+      "fields": {
+        "task_id": {
+          "name": "Aufgaben-ID"
+        }
       }
     }
   }

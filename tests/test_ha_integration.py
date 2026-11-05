@@ -1,6 +1,8 @@
 """Home Assistant level tests: config flow + setup + services."""
 from __future__ import annotations
 
+import os
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -69,14 +71,16 @@ async def test_setup_entry_creates_entities_and_services(hass: HomeAssistant):
 
     workers = hass.states.get("sensor.kim_ki_manager_agenten")
     assert workers is not None
-    # default roles: planner 1 + researcher 1 + coder 2 + tester 1 + reviewer 1
+    # the free mock backend pre-spawns the default roles (cloud is lazy)
+    # planner 1 + researcher 1 + coder 2 + tester 1 + reviewer 1
     assert int(workers.state) == 6
 
     # a conversation agent entity is registered
     assert any(e.startswith("conversation.kim") for e in hass.states.async_entity_ids())
 
     # services registered
-    for service in ("submit", "cancel", "retry", "pause", "resume", "note"):
+    for service in ("submit", "cancel", "retry", "pause", "resume", "note",
+                    "fetch_file", "collect_artifacts"):
         assert hass.services.has_service(DOMAIN, service)
 
     await hass.config_entries.async_unload(entry.entry_id)
@@ -175,3 +179,34 @@ async def test_conversation_commands(hass: HomeAssistant):
     assert runtime.manager.paused is True
     assert "laeuft wieder" in await ask("weiter")
     assert runtime.manager.paused is False
+
+
+async def test_artifact_services_write_files(hass: HomeAssistant):
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={**MOCK_DATA, CONF_MAX_PARALLEL: 4}, entry_id="kim5"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    await hass.services.async_call(DOMAIN, "submit", {"goal": "Baue ein Login"}, blocking=True)
+    await hass.async_block_till_done()
+
+    for _ in range(40):
+        await runtime.coordinator.async_refresh()
+        await hass.async_block_till_done()
+        snap = runtime.coordinator.data
+        if snap["tasks_total"] and snap["tasks_completed"] == snap["tasks_total"]:
+            break
+
+    task_id = next(iter(runtime.manager.tasks))
+    await hass.services.async_call(
+        DOMAIN, "collect_artifacts", {"task_id": task_id}, blocking=True
+    )
+    await hass.services.async_call(
+        DOMAIN, "fetch_file", {"task_id": task_id, "path": "out/report.pdf"}, blocking=True
+    )
+    artifact_dir = hass.config.path("www/kim")
+    assert os.path.exists(os.path.join(artifact_dir, f"{task_id}.zip"))
+    assert os.path.exists(os.path.join(artifact_dir, "report.pdf"))

@@ -29,6 +29,14 @@ Ziel eingeben  ──►  Planner (DAG)  ──►  Zuweisung nach Rolle  ──
 - **Heartbeat & Ausfall-Management.** Jeder Agent meldet Lebenszeichen. Bleibt eines
   aus, wird die Aufgabe neu eingeplant oder nach zu vielen Versuchen endgültig als
   fehlgeschlagen markiert. Die Agenten verwalten sich damit gegenseitig.
+- **Agenten nur bei Bedarf.** Beim Laden der Integration wird kein Agent gestartet.
+  Erst wenn Arbeit anliegt, fährt KIM genau so viele Agenten hoch, wie nötig sind
+  (Cloud-Sandboxes kosten Geld). Nach einer Ruhephase werden sie automatisch wieder
+  beendet (`idle_worker_ttl`).
+- **Ergebnisse abholen.** Fertige Dateien aus dem Arbeitsbereich eines Agenten lassen
+  sich per Service abholen und werden unter `/local/kim/…` vom HA-Webserver
+  ausgeliefert – so kommen PDFs, HTML-Seiten und andere Artefakte direkt in Home
+  Assistant an.
 - **Steuerung per Sprache/Assist.** Über den Conversation-Agenten steuerst du KIM im
   Chat. Services stehen zusätzlich für Automationen bereit.
 
@@ -64,13 +72,26 @@ Ziel eingeben  ──►  Planner (DAG)  ──►  Zuweisung nach Rolle  ──
 | `kim.retry` | `task_id` | Aufgabe erneut versuchen |
 | `kim.pause` / `kim.resume` | – | Zuweisung pausieren / fortsetzen |
 | `kim.note` | `text`, `author`, `task_id` | Notiz schreiben |
+| `kim.fetch_file` | `task_id`, `path`, optional `save_as` | Einzelne Datei des Agenten nach `/local/kim/` holen |
+| `kim.collect_artifacts` | `task_id` | Gesamten Arbeitsbereich als ZIP nach `/local/kim/` holen |
 
 Beispiel:
 
 ```yaml
 service: kim.submit
 data:
-  goal: "Baue eine REST-API für Bestellungen"
+  goal: "Erstelle aus sensor.stromzaehler eine PDF-Rechnung"
+```
+
+Ergebnis abholen (die Datei liegt danach unter
+`http://<dein-ha>:8123/local/kim/rechnung.pdf`):
+
+```yaml
+service: kim.fetch_file
+data:
+  task_id: task_ab12cd34ef
+  path: output/rechnung.pdf
+  save_as: rechnung.pdf
 ```
 
 ### Sensoren
@@ -118,8 +139,9 @@ Home-Assistant-Abhängigkeiten und damit direkt testbar.
 
 - **OpenHands Cloud:** ein API-Schlüssel (Bearer-Token) für die App-Server-API.
 - **Lokaler Agent-Server:** die Basis-URL und – falls gesetzt – der Session-API-Key.
-- **Home Assistant:** Netzwerkzugriff aus der Integration sowie Schreibzugriff auf
-  `<HA-Konfiguration>/.storage/` für den Notizzettel.
+- **Home Assistant:** Netzwerkzugriff aus der Integration, Schreibzugriff auf
+  `<HA-Konfiguration>/.storage/` für den Notizzettel sowie auf
+  `<HA-Konfiguration>/www/kim/` für abgeholte Ergebnisse.
 
 ## Verbesserungsvorschläge
 

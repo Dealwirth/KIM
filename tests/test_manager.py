@@ -19,7 +19,7 @@ from custom_components.kim.scratchpad import Scratchpad
 
 
 def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
-                  fail_roles=None, events=None):
+                  fail_roles=None, events=None, lazy_pool=False, idle_worker_ttl=0):
     backend = MockBackend(completion_delay=completion_delay, fail_roles=fail_roles)
     pad = Scratchpad(str(tmp_path / "notes.jsonl"))
     registry = RoleRegistry(roles)
@@ -35,6 +35,8 @@ def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
         max_parallel=max_parallel,
         heartbeat_timeout=1000,
         stall_timeout=1000,
+        lazy_pool=lazy_pool,
+        idle_worker_ttl=idle_worker_ttl,
         on_event=on_event,
     )
     return manager, backend, pad
@@ -211,3 +213,47 @@ async def test_snapshot_shape(tmp_path):
         assert "session_api_key" not in worker
     # heartbeats are noise and must not show up in the reported notes
     assert all(n["kind"] != "heartbeat" for n in snap["notes"])
+
+
+@pytest.mark.asyncio
+async def test_lazy_pool_starts_nothing_until_needed(tmp_path):
+    """A freshly loaded manager must not spawn any (paid) agent."""
+    roles = [
+        {"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 2},
+        {"name": "tester", "tags": ["test"], "instances": 1},
+    ]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True)
+    await manager.start()
+    assert manager.workers == {}
+    assert backend.created == []
+
+    # the first submit grows the pool just enough to work
+    plan = await manager.submit("Baue Feature X")
+    assert len(plan.tasks) == 4
+    assert len(manager.workers) >= 1
+
+    for _ in range(60):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    assert all(t.state == TASK_DONE for t in plan.tasks)
+
+
+@pytest.mark.asyncio
+async def test_lazy_pool_reaps_idle_workers(tmp_path):
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 2}]
+    manager, backend, _ = build_manager(
+        tmp_path, roles=roles, lazy_pool=True, idle_worker_ttl=0.001
+    )
+    await manager.start()
+    plan = await manager.submit("Baue Feature Y")
+    for _ in range(60):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    # after the run the pool shrinks back down once workers go idle
+    import asyncio
+    await asyncio.sleep(0.02)
+    for _ in range(5):
+        await manager.tick()
+    assert len(manager.workers) < len(backend.created)

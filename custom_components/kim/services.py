@@ -12,6 +12,8 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import (
     SERVICE_CANCEL,
+    SERVICE_COLLECT_ARTIFACTS,
+    SERVICE_FETCH_FILE,
     SERVICE_NOTE,
     SERVICE_PAUSE,
     SERVICE_RESUME,
@@ -37,6 +39,16 @@ NOTE_SCHEMA = vol.Schema(
     }
 )
 
+FETCH_FILE_SCHEMA = vol.Schema(
+    {
+        vol.Required("task_id"): cv.string,
+        vol.Required("path"): cv.string,
+        vol.Optional("save_as"): cv.string,
+    }
+)
+
+COLLECT_SCHEMA = vol.Schema({vol.Required("task_id"): cv.string})
+
 EMPTY_SCHEMA = vol.Schema({})
 
 SCHEMAS: dict[str, vol.Schema] = {
@@ -46,4 +58,6 @@ SCHEMAS: dict[str, vol.Schema] = {
     SERVICE_PAUSE: EMPTY_SCHEMA,
     SERVICE_RESUME: EMPTY_SCHEMA,
     SERVICE_NOTE: NOTE_SCHEMA,
+    SERVICE_FETCH_FILE: FETCH_FILE_SCHEMA,
+    SERVICE_COLLECT_ARTIFACTS: COLLECT_SCHEMA,
 }

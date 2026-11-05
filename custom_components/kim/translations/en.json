@@ -2,79 +2,136 @@
   "config": {
     "step": {
       "user": {
-        "title": "KIM KI-Manager einrichten",
-        "description": "Konfiguriere die Agenten-Engine. Fuer einen ersten Test ohne Cloud nutze den Backend-Typ 'mock'.",
+        "title": "Set up KIM AI Manager",
+        "description": "Configure the agent engine. Use backend type 'mock' for a first offline test.",
         "data": {
           "backend": "Backend",
-          "base_url": "Basis-URL",
-          "api_key": "API-Schluessel",
-          "model": "Modell",
+          "base_url": "Base URL",
+          "api_key": "API key",
+          "model": "Model",
           "repository": "Repository (optional)",
           "branch": "Branch (optional)",
-          "workspace": "Arbeitsverzeichnis (lokal)",
-          "max_parallel": "Max. parallele Agenten",
-          "heartbeat_timeout": "Heartbeat-Timeout (s)",
-          "stall_timeout": "Stillstands-Timeout (s)",
-          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen"
+          "workspace": "Working directory (local)",
+          "max_parallel": "Max parallel agents",
+          "heartbeat_timeout": "Heartbeat timeout (s)",
+          "stall_timeout": "Stall timeout (s)",
+          "claim_ttl": "Claim TTL (s)",
+          "max_retries": "Max retries",
+          "idle_worker_ttl": "Retire agents after idle (s)"
         }
       }
     },
     "error": {
-      "api_key_required": "Fuer das Cloud-Backend ist ein API-Schluessel erforderlich."
+      "api_key_required": "The cloud backend requires an API key.",
+      "invalid_auth": "The API key was rejected.",
+      "cannot_connect": "Could not reach OpenHands."
     },
     "abort": {
-      "already_configured": "KIM ist bereits eingerichtet."
+      "already_configured": "KIM is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "KIM Optionen",
+        "title": "KIM options",
         "data": {
           "backend": "Backend",
-          "base_url": "Basis-URL",
-          "api_key": "API-Schluessel",
-          "model": "Modell",
+          "base_url": "Base URL",
+          "api_key": "API key",
+          "model": "Model",
           "repository": "Repository (optional)",
           "branch": "Branch (optional)",
-          "workspace": "Arbeitsverzeichnis (lokal)",
-          "max_parallel": "Max. parallele Agenten",
-          "heartbeat_timeout": "Heartbeat-Timeout (s)",
-          "stall_timeout": "Stillstands-Timeout (s)",
-          "claim_ttl": "Anspruchs-Gueltigkeit (s)",
-          "max_retries": "Max. Wiederholungen"
+          "workspace": "Working directory (local)",
+          "max_parallel": "Max parallel agents",
+          "heartbeat_timeout": "Heartbeat timeout (s)",
+          "stall_timeout": "Stall timeout (s)",
+          "claim_ttl": "Claim TTL (s)",
+          "max_retries": "Max retries",
+          "idle_worker_ttl": "Retire agents after idle (s)"
         }
       }
     }
   },
   "services": {
     "submit": {
-      "name": "Aufgabe einreichen",
-      "description": "Zerlegt ein Ziel in Teilaufgaben und verteilt sie an die Agenten.",
+      "name": "Submit task",
+      "description": "Splits a goal into subtasks and dispatches them to the agents.",
       "fields": {
-        "goal": {"name": "Ziel", "description": "Was die Agenten erledigen sollen."},
-        "title": {"name": "Titel", "description": "Optionaler Planname."},
-        "plan": {"name": "Plan (JSON)", "description": "Optionaler vorgefertigter Plan als JSON."}
+        "goal": {
+          "name": "Goal",
+          "description": "What the agents should do."
+        },
+        "title": {
+          "name": "Title",
+          "description": "Optional plan name."
+        },
+        "plan": {
+          "name": "Plan (JSON)",
+          "description": "Optional pre-built plan as JSON."
+        }
       }
     },
     "cancel": {
-      "name": "Aufgabe abbrechen",
-      "fields": {"task_id": {"name": "Aufgaben-ID"}}
+      "name": "Cancel task",
+      "fields": {
+        "task_id": {
+          "name": "Task ID"
+        }
+      }
     },
     "retry": {
-      "name": "Aufgabe wiederholen",
-      "fields": {"task_id": {"name": "Aufgaben-ID"}}
-    },
-    "pause": {"name": "Pausieren", "description": "Stoppt die Zuweisung neuer Aufgaben."},
-    "resume": {"name": "Fortsetzen", "description": "Setzt die Zuweisung fort."},
-    "note": {
-      "name": "Notiz schreiben",
-      "description": "Legt eine Nachricht auf dem gemeinsamen Notizzettel ab.",
+      "name": "Retry task",
       "fields": {
-        "text": {"name": "Text"},
-        "author": {"name": "Autor"},
-        "task_id": {"name": "Aufgaben-ID (optional)"}
+        "task_id": {
+          "name": "Task ID"
+        }
+      }
+    },
+    "pause": {
+      "name": "Pause",
+      "description": "Stops assigning new tasks."
+    },
+    "resume": {
+      "name": "Resume",
+      "description": "Resumes assigning tasks."
+    },
+    "note": {
+      "name": "Write note",
+      "description": "Adds a message to the shared scratchpad.",
+      "fields": {
+        "text": {
+          "name": "Text"
+        },
+        "author": {
+          "name": "Author"
+        },
+        "task_id": {
+          "name": "Task ID (optional)"
+        }
+      }
+    },
+    "fetch_file": {
+      "name": "Fetch file from agent",
+      "description": "Copies a single file from the agent workspace to /local/kim/.",
+      "fields": {
+        "task_id": {
+          "name": "Task ID"
+        },
+        "path": {
+          "name": "Path"
+        },
+        "save_as": {
+          "name": "Save as"
+        }
+      }
+    },
+    "collect_artifacts": {
+      "name": "Collect all artifacts",
+      "description": "Downloads the whole agent workspace as a ZIP to /local/kim/.",
+      "fields": {
+        "task_id": {
+          "name": "Task ID"
+        }
       }
     }
   }

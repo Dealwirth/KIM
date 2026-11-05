@@ -1,0 +1,108 @@
+submit:
+  name: Aufgabe einreichen
+  description: >-
+    Übergibt KIM ein Ziel. Der Planner zerlegt es in einen Aufgaben-DAG, den die
+    Agenten parallel abarbeiten.
+  fields:
+    goal:
+      name: Ziel
+      description: Was KIM erledigen soll, in natürlicher Sprache.
+      required: true
+      example: Erstelle eine PDF-Rechnung aus den Daten in sensor.stromzaehler
+      selector:
+        text:
+          multiline: true
+    title:
+      name: Titel
+      description: Kurzer Name für die Anzeige (optional).
+      selector:
+        text:
+    plan:
+      name: Fertiger Plan (JSON)
+      description: Optionaler, bereits zerlegter Plan. Ohne Angabe plant KIM selbst.
+      selector:
+        text:
+          multiline: true
+
+cancel:
+  name: Aufgabe abbrechen
+  description: Bricht eine einzelne Aufgabe ab.
+  fields:
+    task_id:
+      name: Aufgaben-ID
+      required: true
+      selector:
+        text:
+
+retry:
+  name: Aufgabe erneut versuchen
+  description: Setzt eine fehlgeschlagene oder abgebrochene Aufgabe zurück.
+  fields:
+    task_id:
+      name: Aufgaben-ID
+      required: true
+      selector:
+        text:
+
+pause:
+  name: Manager pausieren
+  description: Stoppt die Zuweisung neuer Aufgaben. Laufende Agenten arbeiten weiter.
+
+resume:
+  name: Manager fortsetzen
+  description: Nimmt die Zuweisung nach einer Pause wieder auf.
+
+note:
+  name: Notizzettel-Eintrag
+  description: Schreibt einen Eintrag auf den gemeinsamen Notizzettel der Agenten.
+  fields:
+    text:
+      name: Text
+      required: true
+      selector:
+        text:
+          multiline: true
+    author:
+      name: Absender
+      description: Wer den Eintrag schreibt (Standard "user").
+      selector:
+        text:
+    task_id:
+      name: Aufgaben-ID
+      description: Optional die Aufgabe, zu der der Eintrag gehört.
+      selector:
+        text:
+
+fetch_file:
+  name: Datei vom Agenten holen
+  description: >-
+    Liest eine einzelne Datei aus dem Arbeitsbereich des Agenten, der die Aufgabe
+    ausgeführt hat, und legt sie unter /local/kim/ ab.
+  fields:
+    task_id:
+      name: Aufgaben-ID
+      required: true
+      selector:
+        text:
+    path:
+      name: Pfad im Arbeitsbereich
+      required: true
+      example: output/rechnung.pdf
+      selector:
+        text:
+    save_as:
+      name: Dateiname im Zielordner
+      description: Optionaler Name; Standard ist der Dateiname aus dem Pfad.
+      selector:
+        text:
+
+collect_artifacts:
+  name: Alle Ergebnisse holen
+  description: >-
+    Lädt den kompletten Arbeitsbereich des Agenten als ZIP nach /local/kim/.
+  fields:
+    task_id:
+      name: Aufgaben-ID
+      required: true
+      selector:
+        text:

@@ -64,6 +64,8 @@ class Manager:
         stall_timeout: float = 900,
         policy: str = POLICY_AFFINITY,
         max_retries: int = 1,
+        lazy_pool: bool = True,
+        idle_worker_ttl: float = 900,
         on_event: EventCallback | None = None,
     ) -> None:
         self.backend = backend
@@ -78,9 +80,12 @@ class Manager:
         self.stall_timeout = stall_timeout
         self.policy = policy
         self.max_retries = max_retries
+        self.lazy_pool = lazy_pool
+        self.idle_worker_ttl = idle_worker_ttl
         self.on_event = on_event
 
         self.workers: dict[str, Worker] = {}
+        self.worker_history: dict[str, Worker] = {}
         self.plans: dict[str, Plan] = {}
         self.tasks: dict[str, Task] = {}
         self.paused = False
@@ -92,21 +97,87 @@ class Manager:
     # lifecycle
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        """Spin up the configured agent pool."""
+        """Prepare the pool.
+
+        In lazy mode (the default for cloud backends) no agent is started
+        until the first task needs it, so a freshly loaded integration costs
+        nothing. Eager mode spins the whole pool up front.
+        """
+        if self.lazy_pool:
+            return
         for role in self.registry.all():
             for _ in range(role.instances):
-                try:
-                    worker = await self.backend.start_worker(
-                        role.name, self.model, self.repository, self.branch
-                    )
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.error("KIM: could not start worker for role %s: %s", role.name, err)
-                    continue
-                worker.touch()
-                self.workers[worker.worker_id] = worker
-                self.scratchpad.post(
-                    KIND_LOG, worker.worker_id, f"gestartet (Rolle {role.name})", role=role.name
-                )
+                await self._spawn_worker(role.name)
+
+    async def _spawn_worker(self, role_name: str) -> Worker | None:
+        """Start a single agent instance for ``role_name`` (on demand)."""
+        try:
+            worker = await self.backend.start_worker(
+                role_name, self.model, self.repository, self.branch
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("KIM: could not start worker for role %s: %s", role_name, err)
+            return None
+        worker.touch()
+        self.workers[worker.worker_id] = worker
+        self.worker_history[worker.worker_id] = worker
+        self.scratchpad.post(
+            KIND_LOG, worker.worker_id, f"gestartet (Rolle {role_name})", role=role_name
+        )
+        return worker
+
+    def _role_worker_count(self, role_name: str) -> int:
+        return sum(1 for w in self.workers.values() if w.role == role_name)
+
+    async def _ensure_capacity(self) -> None:
+        """Lazily grow the pool so pending work can be dispatched."""
+        if not self.lazy_pool:
+            return
+        pending = [t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)]
+        if not pending:
+            return
+        while self._running_count() < self.max_parallel and pending:
+            task = pending[0]
+            role = self._preferred_role(task)
+            role_obj = self.registry.get(role) if role else None
+            cap = role_obj.instances if role_obj else 1
+            if role and self._role_worker_count(role) < cap and not self._idle_workers_for(role):
+                worker = await self._spawn_worker(role)
+                if worker is None:
+                    break
+            else:
+                break
+            pending = [t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)]
+            if self._idle_workers():
+                break
+
+    def _preferred_role(self, task: Task) -> str | None:
+        ranked = self.registry.matching(task)
+        return ranked[0] if ranked else (task.role or None)
+
+    def _idle_workers_for(self, role: str) -> list[Worker]:
+        return [w for w in self._idle_workers() if w.role == role]
+
+    async def _reap_idle_workers(self) -> None:
+        """Stop agent instances that have been idle past ``idle_worker_ttl``."""
+        if not self.lazy_pool or self.idle_worker_ttl <= 0:
+            return
+        now = time.time()
+        for worker in list(self.workers.values()):
+            if worker.current_task_id is not None:
+                continue
+            if self._running_count() >= self.max_parallel:
+                continue
+            if now - worker.last_heartbeat < self.idle_worker_ttl:
+                continue
+            try:
+                await self.backend.stop_worker(worker)
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+            self.workers.pop(worker.worker_id, None)
+            self.scratchpad.post(
+                KIND_LOG, worker.worker_id, "in den Ruhestand versetzt (idle)", role=worker.role
+            )
 
     async def stop(self) -> None:
         for worker in self.workers.values():
@@ -193,12 +264,15 @@ class Manager:
             self._detect_failures()
             if self.paused:
                 return
+            await self._ensure_capacity()
             await self._reconcile()
             await self._assign_ready_tasks()
+            await self._reap_idle_workers()
 
     def _heartbeat(self) -> None:
         for worker in self.workers.values():
-            worker.touch()
+            if worker.current_task_id is not None:
+                worker.touch()
             self.scratchpad.heartbeat(worker.worker_id, role=worker.role)
 
     def _running_count(self) -> int:
@@ -380,14 +454,23 @@ class Manager:
 
     @staticmethod
     def _extract_result(events: list[dict[str, Any]]) -> str | None:
+        """Pull the agent's final answer out of a raw event list."""
+        assistant_texts: list[str] = []
         for event in events:
-            text = event.get("text") or ""
-            if isinstance(text, str) and "ERLEDIGT:" in text:
-                return text.split("ERLEDIGT:", 1)[1].strip()[:500]
+            source = str(event.get("source") or "")
+            text = event.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if "ERLEDIGT:" in text:
+                return text.split("ERLEDIGT:", 1)[1].strip()[:2000]
+            if source in ("assistant", "agent"):
+                assistant_texts.append(text.strip())
+        if assistant_texts:
+            return assistant_texts[0][:2000]
         for event in events:
             text = event.get("text")
             if isinstance(text, str) and text.strip():
-                return text.strip()[:500]
+                return text.strip()[:2000]
         return None
 
     async def _maybe_finish_plan(self, task: Task) -> None:
@@ -424,6 +507,27 @@ class Manager:
 
     def worker_by_id(self, worker_id: str) -> Worker | None:
         return self.workers.get(worker_id)
+
+    def worker_for_task(self, task_id: str) -> Worker | None:
+        """Resolve the agent that ran (or runs) a task, even after reaping."""
+        task = self.tasks.get(task_id)
+        if task is None or not task.assigned_to:
+            return None
+        return self.workers.get(task.assigned_to) or self.worker_history.get(task.assigned_to)
+
+    async def fetch_task_file(self, task_id: str, path: str) -> bytes:
+        """Read one file from the workspace of the agent that ran ``task_id``."""
+        worker = self.worker_for_task(task_id)
+        if worker is None:
+            raise ValueError(f"keine Agent-Instanz fuer Aufgabe {task_id}")
+        return await self.backend.fetch_file(worker, path)
+
+    async def fetch_task_archive(self, task_id: str) -> bytes:
+        """Read the whole workspace of the agent that ran ``task_id`` as zip."""
+        worker = self.worker_for_task(task_id)
+        if worker is None:
+            raise ValueError(f"keine Agent-Instanz fuer Aufgabe {task_id}")
+        return await self.backend.fetch_archive(worker)
 
     def _visible_notes(self, limit: int):
         """Recent scratchpad notes without the noisy heartbeats."""

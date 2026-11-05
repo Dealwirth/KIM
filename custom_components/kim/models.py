@@ -60,6 +60,7 @@ class Worker:
     role: str
     backend: str
     conversation_id: str | None = None
+    sandbox_id: str | None = None
     agent_server_url: str | None = None
     session_api_key: str | None = None
     state: str = STATE_IDLE
@@ -70,6 +71,7 @@ class Worker:
     completed_tasks: int = 0
     failed_tasks: int = 0
     sandbox_status: str | None = None
+    last_result: str | None = None
 
     @property
     def online(self) -> bool:

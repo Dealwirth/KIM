@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -20,6 +21,7 @@ from .const import (
     CONF_BRANCH,
     CONF_CLAIM_TTL,
     CONF_HEARTBEAT_TIMEOUT,
+    CONF_IDLE_WORKER_TTL,
     CONF_MAX_PARALLEL,
     CONF_MAX_RETRIES,
     CONF_MODEL,
@@ -29,6 +31,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CLAIM_TTL,
     DEFAULT_HEARTBEAT_TIMEOUT,
+    DEFAULT_IDLE_WORKER_TTL,
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
@@ -38,6 +41,27 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _validate_cloud(user_input: dict[str, Any]) -> dict[str, str]:
+    """Reject a cloud setup whose API key cannot be used."""
+    base_url = (user_input.get(CONF_BASE_URL) or DEFAULT_BASE_URL).rstrip("/")
+    api_key = user_input.get(CONF_API_KEY, "")
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=15)
+        ) as session:
+            async with session.get(
+                f"{base_url}/api/v1/app-conversations/search?limit=1",
+                headers={"Authorization": f"Bearer {api_key}"},
+            ) as resp:
+                if resp.status in (401, 403):
+                    return {CONF_API_KEY: "invalid_auth"}
+                if resp.status >= 400:
+                    return {"base_url": "cannot_connect"}
+    except Exception:  # noqa: BLE001 - network problems
+        return {"base_url": "cannot_connect"}
+    return {}
 
 
 def _schema(defaults: dict[str, Any]) -> vol.Schema:
@@ -82,6 +106,14 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             ): selector.NumberSelector(
                 selector.NumberSelectorConfig(min=0, max=5, mode=selector.NumberSelectorMode.BOX)
             ),
+            vol.Optional(
+                CONF_IDLE_WORKER_TTL,
+                default=defaults.get(CONF_IDLE_WORKER_TTL, DEFAULT_IDLE_WORKER_TTL),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=60, max=86400, mode=selector.NumberSelectorMode.BOX
+                )
+            ),
         }
     )
 
@@ -94,8 +126,11 @@ class KimConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         errors: dict[str, str] = {}
         if user_input is not None:
-            if user_input.get(CONF_BACKEND) in (BACKEND_CLOUD,) and not user_input.get(CONF_API_KEY):
-                errors[CONF_API_KEY] = "api_key_required"
+            if user_input.get(CONF_BACKEND) == BACKEND_CLOUD:
+                if not user_input.get(CONF_API_KEY):
+                    errors[CONF_API_KEY] = "api_key_required"
+                else:
+                    errors.update(await _validate_cloud(user_input))
             if not errors:
                 return self.async_create_entry(title="KIM", data=user_input)
         return self.async_show_form(

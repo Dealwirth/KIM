@@ -6,6 +6,7 @@ the services/conversation-agent that let a user talk to KIM from Assist.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -14,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .backends import create_backend
 from .const import (
+    ARTIFACT_DIR,
     BACKEND_MOCK,
     CONF_API_KEY,
     CONF_BACKEND,
@@ -21,6 +23,7 @@ from .const import (
     CONF_BRANCH,
     CONF_CLAIM_TTL,
     CONF_HEARTBEAT_TIMEOUT,
+    CONF_IDLE_WORKER_TTL,
     CONF_MAX_PARALLEL,
     CONF_MAX_RETRIES,
     CONF_MODEL,
@@ -31,6 +34,7 @@ from .const import (
     DEFAULT_BASE_URL,
     DEFAULT_CLAIM_TTL,
     DEFAULT_HEARTBEAT_TIMEOUT,
+    DEFAULT_IDLE_WORKER_TTL,
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
@@ -38,6 +42,8 @@ from .const import (
     DEFAULT_WORKSPACE,
     DOMAIN,
     SERVICE_CANCEL,
+    SERVICE_COLLECT_ARTIFACTS,
+    SERVICE_FETCH_FILE,
     SERVICE_NOTE,
     SERVICE_PAUSE,
     SERVICE_RESUME,
@@ -76,6 +82,8 @@ class KimRuntime:
         scratchpad = Scratchpad(scratch_path)
         self.scratchpad = scratchpad
         registry = RoleRegistry(options.get(CONF_ROLES))
+        # Cloud agents cost money and are only started when work arrives.
+        lazy_pool = backend_type != BACKEND_MOCK
 
         def on_event(event: str, data: dict[str, Any]) -> None:
             self.hass.bus.async_fire(event, data)
@@ -94,6 +102,8 @@ class KimRuntime:
             claim_ttl=float(options.get(CONF_CLAIM_TTL, DEFAULT_CLAIM_TTL)),
             stall_timeout=float(options.get(CONF_STALL_TIMEOUT, DEFAULT_STALL_TIMEOUT)),
             max_retries=int(options.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)),
+            lazy_pool=lazy_pool,
+            idle_worker_ttl=float(options.get(CONF_IDLE_WORKER_TTL, DEFAULT_IDLE_WORKER_TTL)),
             on_event=on_event,
         )
 
@@ -159,6 +169,15 @@ class KimRuntime:
                 call.data.get("author", "user"), call.data.get("text", ""), call.data.get("task_id")
             )
 
+        async def _fetch_file(call: ServiceCall) -> None:
+            data = await self._fetch_file(call.data["task_id"], call.data["path"],
+                                          call.data.get("save_as"))
+            self.hass.bus.async_fire(f"{DOMAIN}_artifact", data)
+
+        async def _collect(call: ServiceCall) -> None:
+            data = await self._collect_artifacts(call.data["task_id"])
+            self.hass.bus.async_fire(f"{DOMAIN}_artifact", data)
+
         handlers = {
             SERVICE_SUBMIT: _submit,
             SERVICE_CANCEL: _cancel,
@@ -166,6 +185,44 @@ class KimRuntime:
             SERVICE_PAUSE: _pause,
             SERVICE_RESUME: _resume,
             SERVICE_NOTE: _note,
+            SERVICE_FETCH_FILE: _fetch_file,
+            SERVICE_COLLECT_ARTIFACTS: _collect,
         }
         for name, handler in handlers.items():
             hass.services.async_register(DOMAIN, name, handler, schema=SCHEMAS[name])
+
+    # ------------------------------------------------------------------
+    # artifacts
+    # ------------------------------------------------------------------
+    def _artifact_root(self) -> str:
+        root = self.hass.config.path(ARTIFACT_DIR)
+        os.makedirs(root, exist_ok=True)
+        return root
+
+    @staticmethod
+    def _safe_name(name: str) -> str:
+        """Keep a user-supplied file name inside the artifact directory."""
+        name = os.path.basename(name.replace("\\", "/")).strip()
+        return name or "artifact.bin"
+
+    async def _fetch_file(self, task_id: str, path: str, save_as: str | None = None) -> dict[str, Any]:
+        assert self.manager is not None
+        content = await self.manager.fetch_task_file(task_id, path)
+        target = self._safe_name(save_as or path)
+        dest = os.path.join(self._artifact_root(), target)
+        await self.hass.async_add_executor_job(_write_bytes, dest, content)
+        return {"task_id": task_id, "path": path, "saved": f"/local/kim/{target}",
+                "bytes": len(content)}
+
+    async def _collect_artifacts(self, task_id: str) -> dict[str, Any]:
+        assert self.manager is not None
+        archive = await self.manager.fetch_task_archive(task_id)
+        target = f"{task_id}.zip"
+        dest = os.path.join(self._artifact_root(), target)
+        await self.hass.async_add_executor_job(_write_bytes, dest, archive)
+        return {"task_id": task_id, "saved": f"/local/kim/{target}", "bytes": len(archive)}
+
+
+def _write_bytes(path: str, content: bytes) -> None:
+    with open(path, "wb") as handle:
+        handle.write(content)

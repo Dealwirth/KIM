@@ -19,6 +19,7 @@ CONF_STALL_TIMEOUT = "stall_timeout"
 CONF_WORKSPACE = "workspace"
 CONF_MAX_RETRIES = "max_retries"
 CONF_ROLES = "roles"
+CONF_IDLE_WORKER_TTL = "idle_worker_ttl"
 
 # Backend types
 BACKEND_CLOUD = "cloud"
@@ -36,6 +37,9 @@ DEFAULT_CLAIM_TTL = 900
 DEFAULT_STALL_TIMEOUT = 900
 DEFAULT_WORKSPACE = "/workspace"
 DEFAULT_MAX_RETRIES = 1
+# Agents are started on demand and retired after this many idle seconds so a
+# quiet KIM does not keep paid sandboxes alive.
+DEFAULT_IDLE_WORKER_TTL = 900
 
 # Coordinator polling
 UPDATE_INTERVAL = timedelta(seconds=15)
@@ -67,6 +71,11 @@ SERVICE_PAUSE = "pause"
 SERVICE_RESUME = "resume"
 SERVICE_RETRY = "retry"
 SERVICE_NOTE = "note"
+SERVICE_FETCH_FILE = "fetch_file"
+SERVICE_COLLECT_ARTIFACTS = "collect_artifacts"
+
+# Where collected agent artifacts are published (HA serves /local/ from www/)
+ARTIFACT_DIR = "www/kim"
 
 # Scratchpad
 NOTES_FILE = "notes.jsonl"
