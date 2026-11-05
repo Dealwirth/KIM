@@ -45,3 +45,18 @@ docker run -d --name kim-ha --network host -v /tmp/ha-config:/config \
   `auth_code`, der gegen `/auth/token` getauscht wird. Der `password`-Grant-Typ
   funktioniert nicht.
 - Live-Test eines Auftrags: `POST /api/services/kim/submit {"goal": "..."}`.
+
+## Live-Betrieb (echte HA-Instanz petryss.duckdns.org:8123)
+- Integration per HACS (Repo-ID `1446865836`) installieren/aktualisieren und HA neu
+  starten. Danach meldet `sensor.kim_ki_manager_status` `worker_count`.
+- Backend live umschalten: Options-Flow über
+  `POST /api/config/config_entries/options/flow {"handler": "<entry_id>"}` starten und
+  mit `POST .../options/flow/<flow_id>` das Backend setzen. Für Tests reicht
+  `backend: mock` (kostet nichts, kein Cloud-Kontingent).
+- **Cloud-Tageslimit:** OpenHands Cloud erlaubt standardmäßig 20 Sandboxes pro Tag.
+  Ist das Limit erreicht, liefert der Start-Task `status: ERROR` mit
+  „Daily sandbox limit of 20 reached". KIM überspringt dann nur die betroffene Rolle
+  und versucht es im nächsten Tick erneut – der Rest des Pools läuft weiter.
+- Access-Token läuft ab: neu holen per `/auth/login_flow` → `/auth/token`. Der
+  `authorization_code`-Grant braucht `Content-Type: application/x-www-form-urlencoded`
+  (nicht JSON), sonst `unsupported_grant_type`.
