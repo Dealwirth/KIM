@@ -257,3 +257,21 @@ async def test_lazy_pool_reaps_idle_workers(tmp_path):
     for _ in range(5):
         await manager.tick()
     assert len(manager.workers) < len(backend.created)
+
+
+def test_extract_result_ignores_the_prompt():
+    """Our own task prompt also contains 'ERLEDIGT:' and must not win."""
+    events = [
+        {"source": "assistant", "text": "Fertig. ERLEDIGT: HA ist ein System."},
+        {
+            "source": "user",
+            "text": "Arbeite die Aufgabe ab und antworte mit 'ERLEDIGT: <Ergebnis>'.",
+        },
+    ]
+    assert Manager._extract_result(events) == "HA ist ein System."
+
+
+def test_extract_result_falls_back_to_any_agent_text():
+    events = [{"source": "assistant", "text": "Die Antwort lautet 42."}]
+    assert Manager._extract_result(events) == "Die Antwort lautet 42."
+    assert Manager._extract_result([{"source": "user", "text": "nur prompt"}]) == "nur prompt"

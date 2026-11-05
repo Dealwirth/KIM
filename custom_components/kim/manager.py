@@ -454,19 +454,28 @@ class Manager:
 
     @staticmethod
     def _extract_result(events: list[dict[str, Any]]) -> str | None:
-        """Pull the agent's final answer out of a raw event list."""
+        """Pull the agent's final answer out of a raw event list.
+
+        Events arrive newest-first. The task prompt we sent is itself a
+        ``user`` message that may contain the word "ERLEDIGT:", so only
+        agent-authored text counts as an answer.
+        """
         assistant_texts: list[str] = []
         for event in events:
-            source = str(event.get("source") or "")
+            source = str(event.get("source") or "").lower()
             text = event.get("text")
-            if not isinstance(text, str) or not text.strip():
+            if source not in ("assistant", "agent") or not isinstance(text, str):
                 continue
+            text = text.strip()
+            if text:
+                assistant_texts.append(text)
+
+        for text in assistant_texts:
             if "ERLEDIGT:" in text:
                 return text.split("ERLEDIGT:", 1)[1].strip()[:2000]
-            if source in ("assistant", "agent"):
-                assistant_texts.append(text.strip())
         if assistant_texts:
             return assistant_texts[0][:2000]
+
         for event in events:
             text = event.get("text")
             if isinstance(text, str) and text.strip():
