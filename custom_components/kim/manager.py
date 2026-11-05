@@ -355,6 +355,11 @@ class Manager:
             if worker is None:
                 # no suitable agent for this task; try the next pending one
                 continue
+            if not await self.backend.is_ready(worker):
+                # The agent is still booting / has not answered its readiness
+                # prompt. Sending now would let that reply be mistaken for the
+                # task's answer, so wait for the next tick.
+                continue
             await self._dispatch(task, worker)
             free_slots -= 1
 

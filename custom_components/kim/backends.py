@@ -83,6 +83,10 @@ class BaseBackend:
     async def get_status(self, worker: Worker) -> dict[str, Any]:  # pragma: no cover
         raise NotImplementedError
 
+    async def is_ready(self, worker: Worker) -> bool:
+        """True when the worker may receive a task. Optional per backend."""
+        return True
+
     async def read_events(self, worker: Worker, limit: int = 20) -> list[dict[str, Any]]:
         return []
 
@@ -177,28 +181,23 @@ class CloudBackend(BaseBackend):
             conversation_id=app_conversation_id,
         )
         self._apply_runtime_info(worker, record)
-        await self._wait_for_ready(worker)
         return worker
 
-    async def _wait_for_ready(self, worker: Worker, timeout: float = 90.0) -> None:
-        """Wait until the agent answers its readiness prompt.
+    async def is_ready(self, worker: Worker) -> bool:
+        """True once the agent has answered its readiness prompt.
 
-        Without this the "I am ready" reply can land *after* the first task
-        prompt in the transcript and be mistaken for that task's answer.
+        We wait for this before sending the first task, otherwise the "I am
+        ready" reply can land *after* the task prompt and be mistaken for that
+        task's answer.
         """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            try:
-                events = await self.read_events(worker, limit=10)
-            except Exception:  # noqa: BLE001 - keep waiting, the sandbox may boot
-                events = []
-            if any(
-                str(e.get("source") or "").lower() in ("assistant", "agent")
-                and e.get("text")
-                for e in events
-            ):
-                return
-            await asyncio.sleep(3)
+        try:
+            events = await self.read_events(worker, limit=10)
+        except Exception:  # noqa: BLE001 - the sandbox may still be booting
+            return False
+        return any(
+            str(e.get("source") or "").lower() in ("assistant", "agent") and e.get("text")
+            for e in events
+        )
 
     async def _poll_start_task(self, start_task_id: str, timeout: float = 300.0) -> str:
         if not start_task_id:
