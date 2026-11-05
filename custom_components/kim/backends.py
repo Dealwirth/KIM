@@ -433,11 +433,15 @@ class MockBackend(BaseBackend):
         self.fail_send: set[str] = set()
         # when set, send_task() always raises (dead agent from the start)
         self.fail_send_all = False
+        # roles whose start_worker() raises (e.g. quota exhausted)
+        self.fail_start_roles: set[str] = set()
 
     async def close(self) -> None:
         return None
 
     async def start_worker(self, role, model, repository=None, branch=None) -> Worker:
+        if role in self.fail_start_roles:
+            raise RuntimeError(f"mock start failed for role {role}")
         worker = Worker(
             worker_id=new_id("worker"),
             role=role,

@@ -359,6 +359,38 @@ async def test_missing_answer_requeues_instead_of_faking_done(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_one_failing_role_does_not_block_the_pool(tmp_path):
+    """A role whose agent cannot start must not stop other roles."""
+    roles = [
+        {"name": "researcher", "tags": ["research"], "instances": 1},
+        {"name": "coder", "tags": ["code"], "instances": 1},
+        {"name": "tester", "tags": ["test"], "instances": 1},
+    ]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True, max_parallel=3)
+    await manager.start()
+    backend.fail_start_roles.add("researcher")
+
+    plan = await manager.submit("Paralleles Vorhaben")
+    manager.tasks.clear()
+    from custom_components.kim.models import Task
+
+    for i, (role, tag) in enumerate([("researcher", "research"), ("coder", "code"), ("tester", "test")]):
+        manager.tasks[f"t{i}"] = Task(
+            task_id=f"t{i}", title=f"T{i} {role}", description=f"mach {role}",
+            role=role, tags=[tag], run_id=plan.run_id,
+        )
+
+    for _ in range(6):
+        await manager.tick()
+
+    # the two healthy roles started and finished, despite the broken one
+    states = {t.role: t.state for t in manager.tasks.values()}
+    assert states["coder"] == TASK_DONE
+    assert states["tester"] == TASK_DONE
+    assert len(backend.created) == 2
+
+
+@pytest.mark.asyncio
 async def test_worker_that_never_becomes_ready_is_replaced(tmp_path):
     """A sandbox that never answers readiness must be swapped out."""
     roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 1}]

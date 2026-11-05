@@ -152,7 +152,9 @@ class Manager:
             if self._idle_workers_for(role):
                 continue
             if await self._spawn_worker(role) is None:
-                break
+                # One failing role must not block the rest of the pool; the
+                # next tick retries the spawn.
+                continue
 
     def _preferred_role(self, task: Task) -> str | None:
         return self.registry.best_role(task) or (task.role or None)
