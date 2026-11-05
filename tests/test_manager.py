@@ -1,6 +1,8 @@
 """Integration tests for the KIM manager using the mock backend."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from custom_components.kim.backends import MockBackend
@@ -275,6 +277,42 @@ def test_extract_result_falls_back_to_any_agent_text():
     events = [{"source": "assistant", "text": "Die Antwort lautet 42."}]
     assert Manager._extract_result(events) == "Die Antwort lautet 42."
     assert Manager._extract_result([{"source": "user", "text": "nur prompt"}]) == "nur prompt"
+
+
+@pytest.mark.asyncio
+async def test_each_role_gets_its_own_agent(tmp_path):
+    """Three distinct roles must run on three distinct agents in parallel."""
+    manager, backend, _ = build_manager(tmp_path, lazy_pool=True, max_parallel=3)
+    await manager.start()
+
+    plan = await manager.submit(
+        "Parallel",
+        plan_json=json.dumps(
+            {
+                "title": "Rollen-Test",
+                "tasks": [
+                    {"id": "r", "title": "Recherche", "role": "researcher",
+                     "tags": ["research"], "depends_on": []},
+                    {"id": "c", "title": "Code", "role": "coder",
+                     "tags": ["code"], "depends_on": []},
+                    {"id": "t", "title": "Test", "role": "tester",
+                     "tags": ["test"], "depends_on": []},
+                ],
+            }
+        ),
+    )
+    await manager.tick()
+    roles = sorted(w.role for w in manager.workers.values())
+    assert roles == ["coder", "researcher", "tester"]
+
+    for _ in range(60):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    for task in plan.tasks:
+        worker = manager.worker_by_id(task.assigned_to)
+        assert worker is not None
+        assert worker.role == task.role
 
 
 @pytest.mark.asyncio

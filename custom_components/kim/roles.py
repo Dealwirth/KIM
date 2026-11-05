@@ -80,6 +80,34 @@ class RoleRegistry:
         scores.sort(key=lambda item: item[0], reverse=True)
         return [name for _, name in scores]
 
+    def best_role(self, task: Task) -> str | None:
+        """The role whose function fits the task best (or ``None`` if unknown)."""
+        wanted = {t.lower() for t in task.tags}
+        if task.role:
+            wanted.add(task.role.lower())
+        best: tuple[int, str] | None = None
+        for role in self._roles.values():
+            role_tags = {t.lower() for t in role.tags} | {role.name.lower()}
+            overlap = len(wanted & role_tags)
+            if overlap == 0:
+                continue
+            candidate = (overlap, role.name)
+            if best is None or candidate > best:
+                best = candidate
+        return best[1] if best else None
+
+    def compatible_roles(self, task: Task) -> set[str]:
+        """All roles that share at least one tag with the task."""
+        wanted = {t.lower() for t in task.tags}
+        if task.role:
+            wanted.add(task.role.lower())
+        result: set[str] = set()
+        for role in self._roles.values():
+            role_tags = {t.lower() for t in role.tags} | {role.name.lower()}
+            if wanted & role_tags:
+                result.add(role.name)
+        return result
+
 
 def _role_load(workers: list[Worker]) -> dict[str, int]:
     load: dict[str, int] = {}
@@ -100,18 +128,37 @@ def select_worker(
     """Pick the best idle worker for a task.
 
     ``candidates`` must already be filtered to *idle, online* workers.
+    An agent only takes a task that matches its function: if the task names a
+    known role, workers of that role (or another role that also fits) are
+    preferred. Unrelated agents are only used as a last resort for untagged
+    tasks so that work never silently lands on the wrong specialist.
     """
     if not candidates:
         return None
 
     ranked_roles = registry.matching(task)
+    if task.role and task.role in registry:
+        eligible = [w for w in candidates if w.role == task.role]
+        if not eligible:
+            compatible = registry.compatible_roles(task)
+            eligible = [w for w in candidates if w.role in compatible]
+        if not eligible:
+            return None
+    elif task.tags:
+        compatible = registry.compatible_roles(task)
+        eligible = [w for w in candidates if w.role in compatible]
+    else:
+        eligible = candidates
+
+    if not eligible:
+        return None
 
     if policy == POLICY_LEAST_LOADED:
-        return min(candidates, key=lambda w: (w.completed_tasks, w.started_at))
+        return min(eligible, key=lambda w: (w.completed_tasks, w.started_at))
 
     if policy == POLICY_ROUND_ROBIN:
         cursor = round_robin_cursor if round_robin_cursor is not None else {}
-        ordered = sorted(candidates, key=lambda w: w.worker_id)
+        ordered = sorted(eligible, key=lambda w: w.worker_id)
         idx = cursor.get(task.role or "*", 0) % len(ordered)
         chosen = ordered[idx]
         cursor[task.role or "*"] = idx + 1
@@ -125,4 +172,4 @@ def select_worker(
             rank = len(ranked_roles)
         return (rank, worker.completed_tasks, worker.started_at)
 
-    return min(candidates, key=affinity_key)
+    return min(eligible, key=affinity_key)

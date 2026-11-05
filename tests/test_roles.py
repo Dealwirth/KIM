@@ -72,3 +72,39 @@ def test_custom_roles_override_defaults():
     registry = RoleRegistry([{"name": "specialist", "tags": ["x"]}])
     assert registry.names() == ["specialist"]
     assert "coder" not in registry
+
+
+def test_unknown_role_task_waits_instead_of_misassigning():
+    registry = RoleRegistry()
+    task = Task(task_id="t", title="x", role="tester", tags=["test"])
+    coder = _worker("coder")
+    assert select_worker(task, [coder], registry) is None
+
+
+def test_compatible_role_can_help_out():
+    registry = RoleRegistry(
+        [
+            {"name": "coder", "tags": ["code", "test"]},
+            {"name": "tester", "tags": ["test"]},
+        ]
+    )
+    task = Task(task_id="t", title="x", role="tester", tags=["test"])
+    coder = _worker("coder")
+    tester = _worker("tester")
+    # the dedicated tester is preferred over the coder that also fits
+    assert select_worker(task, [coder, tester], registry) is tester
+    # but the coder can take over when no tester is free
+    assert select_worker(task, [coder], registry) is coder
+
+
+def test_best_role_picks_strongest_tag_overlap():
+    registry = RoleRegistry(
+        [
+            {"name": "coder", "tags": ["code", "test"]},
+            {"name": "tester", "tags": ["test", "qa"]},
+        ]
+    )
+    task = Task(task_id="t", title="x", tags=["test", "qa"])
+    assert registry.best_role(task) == "tester"
+    assert registry.best_role(Task(task_id="u", title="y", tags=["code"])) == "coder"
+    assert registry.best_role(Task(task_id="v", title="z")) is None

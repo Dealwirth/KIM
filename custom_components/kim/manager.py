@@ -134,27 +134,27 @@ class Manager:
         """Lazily grow the pool so pending work can be dispatched."""
         if not self.lazy_pool:
             return
-        pending = [t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)]
-        if not pending:
-            return
-        while self._running_count() < self.max_parallel and pending:
-            task = pending[0]
-            role = self._preferred_role(task)
-            role_obj = self.registry.get(role) if role else None
-            cap = role_obj.instances if role_obj else 1
-            if role and self._role_worker_count(role) < cap and not self._idle_workers_for(role):
-                worker = await self._spawn_worker(role)
-                if worker is None:
-                    break
-            else:
+        pending = sorted(
+            (t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)),
+            key=lambda t: t.created_at,
+        )
+        for task in pending:
+            if len(self.workers) >= self.max_parallel:
                 break
-            pending = [t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)]
-            if self._idle_workers():
+            role = self._preferred_role(task)
+            if not role:
+                continue
+            role_obj = self.registry.get(role)
+            cap = role_obj.instances if role_obj else 1
+            if self._role_worker_count(role) >= cap:
+                continue
+            if self._idle_workers_for(role):
+                continue
+            if await self._spawn_worker(role) is None:
                 break
 
     def _preferred_role(self, task: Task) -> str | None:
-        ranked = self.registry.matching(task)
-        return ranked[0] if ranked else (task.role or None)
+        return self.registry.best_role(task) or (task.role or None)
 
     def _idle_workers_for(self, role: str) -> list[Worker]:
         return [w for w in self._idle_workers() if w.role == role]
@@ -353,7 +353,8 @@ class Manager:
                 task, idle, self.registry, policy=self.policy, round_robin_cursor=self._rr_cursor
             )
             if worker is None:
-                break
+                # no suitable agent for this task; try the next pending one
+                continue
             await self._dispatch(task, worker)
             free_slots -= 1
 
