@@ -108,6 +108,7 @@ class Task:
     attempts: int = 0
     max_retries: int = 1
     result_misses: int = 0
+    start_misses: int = 0
     run_id: str | None = None
 
     @property

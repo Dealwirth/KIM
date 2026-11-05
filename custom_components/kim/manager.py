@@ -464,12 +464,31 @@ class Manager:
                 self._fail_worker(worker, f"Transkript nicht lesbar: {err}")
             return
         worker.result_errors = 0
-        result = self._extract_result(events, task.task_id)
+        texts = self._agent_texts_after_prompt(events, task.task_id)
 
+        if not texts:
+            # The agent reports "finished" but has not reacted to our task yet
+            # (e.g. the "I am ready" reply of a freshly started agent). Keep the
+            # task assigned and poll again instead of inventing a result.
+            task.start_misses += 1
+            _LOGGER.info(
+                "KIM: %s reports finished but no answer for %s yet (%d)",
+                worker.worker_id,
+                task.task_id,
+                task.start_misses,
+            )
+            if task.start_misses >= 6:
+                task.start_misses = 0
+                worker.state = STATE_IDLE
+                worker.current_task_id = None
+                self._requeue(task, "Agent hat nicht mit der Aufgabe begonnen")
+            return
+        task.start_misses = 0
+
+        result = self._extract_result(events, task.task_id)
         if result is None:
-            # The agent reports "finished" but we cannot find its answer for
-            # this task (e.g. a reused conversation). Never invent "erledigt";
-            # wait a little, then hand the task to another agent.
+            # There is agent text but none of it is usable. Never invent
+            # "erledigt"; wait a little, then hand the task to another agent.
             task.result_misses += 1
             _LOGGER.warning(
                 "KIM: no answer for %s yet (miss %d)", task.task_id, task.result_misses
@@ -497,43 +516,45 @@ class Manager:
         await self._maybe_finish_plan(task)
 
     @staticmethod
-    def _extract_result(
-        events: list[dict[str, Any]], task_id: str | None = None
-    ) -> str | None:
-        """Pull the agent's answer for the *current* task out of the events.
+    def _agent_texts_after_prompt(
+        events: list[dict[str, Any]], task_id: str | None
+    ) -> list[str]:
+        """Agent-authored messages newer than our own task prompt.
 
         Events arrive newest-first. A conversation is reused across tasks, so
-        the newest assistant message may belong to an earlier task. Our own
-        task prompt carries ``task_id``; everything newer than that prompt is
-        the answer we are waiting for.
+        everything at or before our dispatch prompt (which carries ``task_id``)
+        belongs to earlier work and must be ignored.
         """
-        # Ignore everything at or before our own dispatch prompt.
+        scoped = events
         if task_id:
             marker = f"({task_id})"
-            cut = len(events)
             for index, event in enumerate(events):
                 text = event.get("text")
                 if isinstance(text, str) and marker in text:
-                    cut = index
+                    scoped = events[:index]
                     break
-            scoped = events[:cut]
-        else:
-            scoped = events
 
-        agent_texts: list[str] = []
+        texts: list[str] = []
         for event in scoped:
             source = str(event.get("source") or "").lower()
             text = event.get("text")
             if source in ("assistant", "agent") and isinstance(text, str):
                 stripped = text.strip()
                 if stripped:
-                    agent_texts.append(stripped)
+                    texts.append(stripped)
+        return texts
 
-        for text in agent_texts:
+    @staticmethod
+    def _extract_result(
+        events: list[dict[str, Any]], task_id: str | None = None
+    ) -> str | None:
+        """Pull the agent's answer for the *current* task out of the events."""
+        texts = Manager._agent_texts_after_prompt(events, task_id)
+        for text in texts:
             if "ERLEDIGT:" in text:
                 return text.split("ERLEDIGT:", 1)[1].strip()[:2000]
-        if agent_texts:
-            return agent_texts[0][:2000]
+        if texts:
+            return texts[0][:2000]
         return None
 
     async def _maybe_finish_plan(self, task: Task) -> None:
