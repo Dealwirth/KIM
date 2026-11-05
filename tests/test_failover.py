@@ -117,6 +117,27 @@ async def test_all_backends_down_raises():
 
 
 @pytest.mark.asyncio
+async def test_create_backend_covers_every_backend_type():
+    """Regression: 'auto' blew up in production because BACKEND_AUTO was unimported."""
+    from custom_components.kim.backends import create_backend
+    from custom_components.kim.const import (
+        BACKEND_AUTO,
+        BACKEND_CLOUD,
+        BACKEND_LOCAL,
+        BACKEND_MOCK,
+    )
+
+    assert create_backend(BACKEND_MOCK).backend == "mock"
+    assert create_backend(BACKEND_LOCAL, local_url="http://localhost:3000").backend == "local"
+    assert create_backend(BACKEND_CLOUD, api_key="x").backend == "cloud"
+    auto = create_backend(BACKEND_AUTO, api_key="", local_url="")
+    assert isinstance(auto, FailoverBackend)
+    assert [name for name, _ in auto.chain] == ["mock"]
+    auto_with_key = create_backend(BACKEND_AUTO, api_key="x", local_url="http://localhost:3000")
+    assert [name for name, _ in auto_with_key.chain] == ["cloud", "local", "mock"]
+
+
+@pytest.mark.asyncio
 async def test_archive_local_roundtrip(tmp_path):
     store = ArchiveStore(repo="", token="", local_dir=str(tmp_path))
     result = await store.save_run("kim-run-1", {"plans": [{"title": "x"}], "notes": []})

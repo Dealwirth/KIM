@@ -21,9 +21,11 @@ from typing import Any
 import aiohttp
 
 from .const import (
+    BACKEND_AUTO,
     BACKEND_CLOUD,
     BACKEND_LOCAL,
     BACKEND_MOCK,
+    DEFAULT_BASE_URL,
     STATE_DONE,
     STATE_FAILED,
     STATE_WORKING,
@@ -126,6 +128,7 @@ class BaseBackend:
 class CloudBackend(BaseBackend):
     def __init__(self, base_url: str, api_key: str, *, session: aiohttp.ClientSession | None = None) -> None:
         super().__init__(session=session)
+        self.backend = BACKEND_CLOUD
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
 
@@ -327,6 +330,7 @@ class LocalBackend(BaseBackend):
                  model: str = "openhands/deepseek-v4.1-flash",
                  *, session: aiohttp.ClientSession | None = None) -> None:
         super().__init__(session=session)
+        self.backend = BACKEND_LOCAL
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.workspace = workspace
@@ -435,6 +439,7 @@ class MockBackend(BaseBackend):
     def __init__(self, completion_delay: int = 1, fail_roles: list[str] | None = None,
                  model: str = "mock/model") -> None:
         super().__init__(session=None)
+        self.backend = BACKEND_MOCK
         self.completion_delay = completion_delay
         self.fail_roles = set(fail_roles or [])
         self.model = model
@@ -529,6 +534,7 @@ class FailoverBackend(BaseBackend):
 
     def __init__(self, chain: list[tuple[str, BaseBackend]], *, cooldown: float = 3600.0) -> None:
         super().__init__(session=None)
+        self.backend = BACKEND_AUTO
         if not chain:
             raise ValueError("failover backend needs at least one backend")
         self.chain = chain
@@ -620,11 +626,13 @@ class FailoverBackend(BaseBackend):
 
 def create_backend(backend_type: str, **kwargs) -> BaseBackend:
     if backend_type == BACKEND_CLOUD:
-        return CloudBackend(kwargs["base_url"], kwargs["api_key"])
+        return CloudBackend(
+            kwargs.get("base_url") or DEFAULT_BASE_URL, kwargs.get("api_key", "")
+        )
     if backend_type == BACKEND_LOCAL:
         return LocalBackend(
-            kwargs["base_url"],
-            kwargs["api_key"],
+            kwargs.get("local_url") or kwargs["base_url"],
+            kwargs.get("local_api_key") or kwargs.get("api_key", ""),
             workspace=kwargs.get("workspace", "/workspace"),
             model=kwargs.get("model", "openhands/deepseek-v4.1-flash"),
         )
@@ -634,7 +642,14 @@ def create_backend(backend_type: str, **kwargs) -> BaseBackend:
             fail_roles=kwargs.get("fail_roles"),
         )
     if backend_type == BACKEND_AUTO:
-        return create_failover_backend(**kwargs)
+        return create_failover_backend(
+            base_url=kwargs.get("base_url", DEFAULT_BASE_URL),
+            api_key=kwargs.get("api_key", ""),
+            local_url=kwargs.get("local_url", ""),
+            local_api_key=kwargs.get("local_api_key", ""),
+            workspace=kwargs.get("workspace", "/workspace"),
+            model=kwargs.get("model", "openhands/deepseek-v4.1-flash"),
+        )
     raise ValueError(f"unknown backend: {backend_type}")
 
 

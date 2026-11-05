@@ -252,13 +252,16 @@ class KimPanel extends HTMLElement {
     if (!tasks.length) {
       tasksBox.innerHTML = `<div class="empty">Noch kein Auftrag. Oben eintippen und los.</div>`;
     } else {
-      tasksBox.innerHTML = tasks.map((t) => `
+      tasksBox.innerHTML = tasks.map((t) => {
+        const waiting = ["pending", "blocked"].includes(t.state) && (t.depends_on || []).length;
+        return `
         <div class="task" data-state="${esc(t.state)}">
           <div class="t"><span class="role">${esc(t.role || "?")}</span><span>${esc(t.title)}</span></div>
-          <div class="meta">${esc(TASK_LABEL[t.state] || t.state)}${t.depends_on && t.depends_on.length ? " &middot; wartet auf Vorgaenger" : ""}${t.attempts ? ` &middot; Versuch ${t.attempts}` : ""}</div>
+          <div class="meta">${esc(TASK_LABEL[t.state] || t.state)}${waiting ? " &middot; wartet auf Vorgaenger" : ""}${t.attempts ? ` &middot; Versuch ${t.attempts}` : ""}</div>
           ${t.result ? `<div class="res">${esc(String(t.result).slice(0, 400))}</div>` : ""}
           ${t.error ? `<div class="res" style="color:var(--bad)">${esc(String(t.error).slice(0, 240))}</div>` : ""}
-        </div>`).join("");
+        </div>`;
+      }).join("");
     }
 
     const workers = data.workers || [];
