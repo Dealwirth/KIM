@@ -111,6 +111,10 @@ class Task:
     result_misses: int = 0
     start_misses: int = 0
     run_id: str | None = None
+    # Earliest wall-clock time a requeued task may be dispatched again. A
+    # growing delay between attempts keeps a flapping agent from burning the
+    # task's retries within seconds.
+    next_attempt_at: float = 0.0
 
     @property
     def terminal(self) -> bool:
@@ -118,11 +122,20 @@ class Task:
 
         return self.state in TERMINAL_TASK_STATES
 
+    @property
+    def due(self) -> bool:
+        return time.time() >= self.next_attempt_at
+
     def touch(self) -> None:
         self.updated_at = _now()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Task":
+        known = {f for f in cls.__dataclass_fields__}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 @dataclass
@@ -143,3 +156,13 @@ class Plan:
             "run_id": self.run_id,
             "tasks": [t.to_dict() for t in self.tasks],
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Plan":
+        return cls(
+            plan_id=str(data.get("plan_id", new_id("plan"))),
+            title=str(data.get("title", "Plan")),
+            created_at=float(data.get("created_at", _now())),
+            run_id=data.get("run_id"),
+            tasks=[Task.from_dict(t) for t in data.get("tasks", []) if isinstance(t, dict)],
+        )

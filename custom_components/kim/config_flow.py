@@ -22,9 +22,11 @@ from .const import (
     CONF_LOCAL_URL,
     CONF_MAX_PARALLEL,
     CONF_MODEL,
+    CONF_RETRY_BACKOFF,
     DEFAULT_BASE_URL,
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MODEL,
+    DEFAULT_RETRY_BACKOFF,
     DOMAIN,
 )
 
@@ -79,6 +81,12 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_ARCHIVE_REPO, default=defaults.get(CONF_ARCHIVE_REPO, "")
             ): str,
+            vol.Optional(
+                CONF_RETRY_BACKOFF,
+                default=defaults.get(CONF_RETRY_BACKOFF, DEFAULT_RETRY_BACKOFF),
+            ): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=0, max=300, mode=selector.NumberSelectorMode.BOX)
+            ),
         }
     )
 

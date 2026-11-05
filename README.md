@@ -47,6 +47,8 @@ Ziel eingeben  ──►  Planner (DAG)  ──►  Zuweisung nach Rolle  ──
 2. Home Assistant neu starten.
 3. Einstellungen → Geräte & Dienste → Integration hinzufügen → **KIM KI-Manager**.
 4. Backend wählen:
+   - `auto` – empfohlen: probiert Cloud → Lokal → Mock der Reihe nach und
+     fällt bei erschöpftem Kontingent automatisch auf die nächste Stufe zurück.
    - `mock` – komplett offline, ideal zum Ausprobieren.
    - `local` – ein lokal laufender OpenHands-Agent-Server.
    - `cloud` – OpenHands Cloud (API-Schlüssel erforderlich).
@@ -124,6 +126,20 @@ ohne sich zu überschreiben. Jede Zeile ist eine Nachricht:
 Dateizugriffe laufen in einem eigenen Hintergrund-Thread. Der Home-Assistant-Event-Loop
 wird dadurch nie blockiert.
 
+### Ausfall-Management
+
+- **Heartbeat:** Jeder laufende Agent meldet sich zyklisch. Bleibt das aus, wird er
+  erst als `haengt` markiert, nach dem dreifachen Timeout als `offline` entfernt.
+- **Neuverteilung mit Backoff:** Die Aufgabe des toten Agenten geht zurück in die
+  Warteschlange, aber erst nach einer wachsenden Wartezeit
+  (`retry_backoff`, Standard 5 s, verdoppelt sich bis 120 s). So verbrennt ein
+  flatternder Agent die Wiederholungen nicht in Sekunden.
+- **Ersatz:** Ein ausgefallener Agent wird verworfen und beim nächsten Tick durch
+  einen frischen derselben Rolle ersetzt. Die Rolle bleibt also besetzt.
+- **Neustart-Festigkeit:** Pläne und Aufgaben werden in einem HA-`Store` gesichert.
+  Nach einem Neustart werden sie geladen; Aufgaben, die beim Stopp liefen, gehen
+  zurück auf `pending` und werden neu verteilt.
+
 ## Entwicklung und Tests
 
 ```bash
@@ -149,10 +165,11 @@ Home-Assistant-Abhängigkeiten und damit direkt testbar.
   Planer-Agent (oder ein LLM-Aufruf) könnte den DAG feiner und aufgabenspezifisch
   schneiden. Der Code nimmt bereits einen fertigen JSON-Plan entgegen (`kim.submit`
   mit `plan`), das ist der natürliche Anschlusspunkt.
-- **Persistente Pläne.** Aktuell liegen Pläne im Speicher. Ein Neustart verliert sie.
-  Ein HA-`Store` würde sie über Neustarts hinweg erhalten.
+- **Persistente Pläne.** Erledigt: Pläne und Aufgaben liegen jetzt in einem
+  HA-`Store` und überstehen einen Neustart. Ein noch offener Ausbau wäre eine
+  Historie mehrerer Läufe im Panel.
 - **Kosten-/Zeitlimits pro Aufgabe.** Ein Budget pro Aufgabe verhindert, dass ein
   Agent endlos arbeitet.
-- **Retry-Strategie mit Backoff.** Statt sofortiger Neuverteilung ein wachsender
-  Abstand zwischen den Versuchen.
+- **Retry-Strategie mit Backoff.** Erledigt: `retry_backoff` (Standard 5 s)
+  verdoppelt den Abstand zwischen den Versuchen bis 120 s.
 - **Feinere Rollen-Auswahl.** Skills und ein Lastmaß je Agent statt reiner Tag-Schnittmenge.

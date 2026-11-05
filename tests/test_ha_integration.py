@@ -13,6 +13,7 @@ from homeassistant.setup import async_setup_component
 from custom_components.kim.const import (
     CONF_BACKEND,
     CONF_MAX_PARALLEL,
+    CONF_RETRY_BACKOFF,
     DOMAIN,
 )
 
@@ -32,6 +33,9 @@ async def setup_homeassistant(hass: HomeAssistant):
 MOCK_DATA = {
     CONF_BACKEND: "mock",
     CONF_MAX_PARALLEL: 2,
+    # Tests drive the coordinator manually; no real time may pass between
+    # retries, so the backoff is disabled here (production default is 5s).
+    CONF_RETRY_BACKOFF: 0,
 }
 
 

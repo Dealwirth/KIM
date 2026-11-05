@@ -14,6 +14,7 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .backends import FailoverBackend, create_backend
@@ -35,6 +36,7 @@ from .const import (
     CONF_MAX_RETRIES,
     CONF_MODEL,
     CONF_REPOSITORY,
+    CONF_RETRY_BACKOFF,
     CONF_ROLES,
     CONF_STALL_TIMEOUT,
     CONF_WORKSPACE,
@@ -45,6 +47,8 @@ from .const import (
     DEFAULT_MAX_PARALLEL,
     DEFAULT_MAX_RETRIES,
     DEFAULT_MODEL,
+    DEFAULT_RETRY_BACKOFF,
+    DEFAULT_RETRY_BACKOFF_MAX,
     DEFAULT_STALL_TIMEOUT,
     DEFAULT_WORKSPACE,
     DOMAIN,
@@ -124,6 +128,8 @@ class KimRuntime:
             max_retries=int(options.get(CONF_MAX_RETRIES, DEFAULT_MAX_RETRIES)),
             lazy_pool=lazy_pool,
             idle_worker_ttl=float(options.get(CONF_IDLE_WORKER_TTL, DEFAULT_IDLE_WORKER_TTL)),
+            retry_backoff_base=float(options.get(CONF_RETRY_BACKOFF, DEFAULT_RETRY_BACKOFF)),
+            retry_backoff_max=DEFAULT_RETRY_BACKOFF_MAX,
             on_event=on_event,
         )
 
@@ -131,6 +137,17 @@ class KimRuntime:
         self.manager = self._build_manager()
         if self.scratchpad is not None:
             await self.hass.async_add_executor_job(self.scratchpad.wait_ready)
+        # Restore the plan/task graph from the previous HA run so a restart
+        # does not lose work in flight.
+        store = Store(self.hass, 1, f"{DOMAIN}_state_{self.entry.entry_id}")
+        self._store = store
+        try:
+            saved = await store.async_load()
+        except Exception:  # noqa: BLE001 - a broken file must not block setup
+            saved = None
+        restored = self.manager.load_state(saved)
+        if restored:
+            _LOGGER.info("KIM: %d Aufgaben aus dem letzten Lauf wiederhergestellt", restored)
         await self.manager.start()
         # Give the archive a shared HTTP session and a local fallback folder.
         if self.archive is not None:
@@ -153,6 +170,7 @@ class KimRuntime:
         self._register_services()
 
     async def async_stop(self) -> None:
+        await self._async_persist()
         if self.coordinator is not None:
             await self.coordinator.async_shutdown()
         if self.manager is not None:
@@ -163,10 +181,21 @@ class KimRuntime:
         if session is not None and not session.closed:
             await session.close()
 
+    async def _async_persist(self) -> None:
+        store = getattr(self, "_store", None)
+        if store is None or self.manager is None:
+            return
+        try:
+            await store.async_save(self.manager.dump_state())
+        except Exception:  # noqa: BLE001 - persistence is best effort
+            _LOGGER.warning("KIM: Zustand konnte nicht gespeichert werden", exc_info=True)
+
     async def _async_update(self) -> dict[str, Any]:
         assert self.manager is not None
         await self.manager.tick()
-        return self.manager.snapshot()
+        snapshot = self.manager.snapshot()
+        await self._async_persist()
+        return snapshot
 
     # ------------------------------------------------------------------
     def _register_services(self) -> None:

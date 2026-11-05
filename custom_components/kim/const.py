@@ -23,6 +23,7 @@ CONF_IDLE_WORKER_TTL = "idle_worker_ttl"
 CONF_LOCAL_URL = "local_url"
 CONF_LOCAL_API_KEY = "local_api_key"
 CONF_ARCHIVE_REPO = "archive_repo"
+CONF_RETRY_BACKOFF = "retry_backoff"
 
 # Backend types
 BACKEND_CLOUD = "cloud"
@@ -42,6 +43,10 @@ DEFAULT_CLAIM_TTL = 900
 DEFAULT_STALL_TIMEOUT = 900
 DEFAULT_WORKSPACE = "/workspace"
 DEFAULT_MAX_RETRIES = 1
+# Base delay (seconds) before a failed task is retried; doubles each attempt up
+# to a cap. 0 disables the wait (used by the test suite).
+DEFAULT_RETRY_BACKOFF = 5.0
+DEFAULT_RETRY_BACKOFF_MAX = 120.0
 # Agents are started on demand and retired after this many idle seconds so a
 # quiet KIM does not keep paid sandboxes alive.
 DEFAULT_IDLE_WORKER_TTL = 900

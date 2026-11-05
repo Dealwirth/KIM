@@ -66,6 +66,8 @@ class Manager:
         max_retries: int = 1,
         lazy_pool: bool = True,
         idle_worker_ttl: float = 900,
+        retry_backoff_base: float = 5.0,
+        retry_backoff_max: float = 120.0,
         on_event: EventCallback | None = None,
     ) -> None:
         self.backend = backend
@@ -82,6 +84,8 @@ class Manager:
         self.max_retries = max_retries
         self.lazy_pool = lazy_pool
         self.idle_worker_ttl = idle_worker_ttl
+        self.retry_backoff_base = retry_backoff_base
+        self.retry_backoff_max = retry_backoff_max
         self.max_status_errors = 3
         self.max_not_ready_ticks = 8
         self.on_event = on_event
@@ -134,7 +138,11 @@ class Manager:
     async def _ensure_capacity(self) -> None:
         """Grow or repair the pool so pending work can be dispatched."""
         pending = sorted(
-            (t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)),
+            (
+                t
+                for t in self.tasks.values()
+                if t.state == TASK_PENDING and t.due and self._deps_done(t)
+            ),
             key=lambda t: t.created_at,
         )
         if not pending:
@@ -265,6 +273,7 @@ class Manager:
         task.error = None
         task.assigned_to = None
         task.attempts = 0
+        task.next_attempt_at = 0.0
         task.touch()
         await self.tick()
         return True
@@ -346,9 +355,18 @@ class Manager:
             self._fire(EVENT_TASK_FAILED, {"task_id": task.task_id, "error": reason})
         else:
             task.state = TASK_PENDING
+            # Growing delay so a flapping agent cannot burn the retries at once.
+            delay = min(
+                self.retry_backoff_base * (2 ** max(0, task.attempts - 1)),
+                self.retry_backoff_max,
+            )
+            task.next_attempt_at = time.time() + delay
             task.touch()
             self.scratchpad.post(
-                KIND_LOG, "manager", "Aufgabe zur Neuverteilung freigegeben", task_id=task.task_id
+                KIND_LOG,
+                "manager",
+                f"Aufgabe zur Neuverteilung freigegeben (in {int(delay)}s)",
+                task_id=task.task_id,
             )
 
     async def _assign_ready_tasks(self) -> None:
@@ -370,6 +388,8 @@ class Manager:
             if free_slots <= 0:
                 break
             if not self._deps_done(task):
+                continue
+            if not task.due:
                 continue
             idle = [w for w in self._idle_workers() if w.worker_id not in not_ready]
             if not idle:
@@ -613,6 +633,42 @@ class Manager:
             self.scratchpad.post(
                 KIND_LOG, "manager", f"Plan '{plan.title}' abgeschlossen ({completed}/{total})"
             )
+
+    # ------------------------------------------------------------------
+    # persistence
+    # ------------------------------------------------------------------
+    def dump_state(self) -> dict[str, Any]:
+        """Serialise plans, tasks and the pause flag for a restart."""
+        return {
+            "paused": self.paused,
+            "plans": [p.to_dict() for p in self.plans.values()],
+        }
+
+    def load_state(self, data: dict[str, Any] | None) -> int:
+        """Restore plans/tasks from ``dump_state``. Returns tasks restored.
+
+        Workers are deliberately not restored: an agent conversation from a
+        previous HA run is gone, so every task that was mid-flight is put back
+        to ``pending`` and handed out to a fresh agent on the next tick.
+        """
+        if not data:
+            return 0
+        self.paused = bool(data.get("paused", False))
+        restored = 0
+        for raw_plan in data.get("plans", []):
+            if not isinstance(raw_plan, dict):
+                continue
+            plan = Plan.from_dict(raw_plan)
+            self.plans[plan.plan_id] = plan
+            for task in plan.tasks:
+                task.run_id = plan.plan_id
+                if task.state in (TASK_ASSIGNED, TASK_IN_PROGRESS):
+                    task.state = TASK_PENDING
+                    task.assigned_to = None
+                    task.next_attempt_at = 0.0
+                self.tasks[task.task_id] = task
+                restored += 1
+        return restored
 
     # ------------------------------------------------------------------
     # reporting

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -40,6 +41,7 @@ def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
         stall_timeout=1000,
         lazy_pool=lazy_pool,
         idle_worker_ttl=idle_worker_ttl,
+        retry_backoff_base=0,
         on_event=on_event,
     )
     return manager, backend, pad
@@ -456,3 +458,75 @@ async def test_dead_worker_is_replaced_and_task_recovers(tmp_path):
         if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
             break
     assert all(t.state == TASK_DONE for t in plan.tasks)
+
+
+@pytest.mark.asyncio
+async def test_retry_backoff_delays_redispatch(tmp_path):
+    """A requeued task waits out its backoff before it is handed out again."""
+    roles = [{"name": "research", "tags": ["research", "analysis"], "instances": 1}]
+    backend = MockBackend(completion_delay=1, fail_roles={"research"})
+    pad = Scratchpad(str(tmp_path / "notes.jsonl"))
+    manager = Manager(
+        backend,
+        pad,
+        registry=RoleRegistry(roles),
+        max_parallel=1,
+        heartbeat_timeout=1000,
+        stall_timeout=1000,
+        lazy_pool=True,
+        idle_worker_ttl=0,
+        retry_backoff_base=1000,  # large enough that the wait is observable
+    )
+    await manager.start()
+    plan = await manager.submit("Backoff")
+    task = plan.tasks[0]
+
+    for _ in range(6):
+        await manager.tick()
+    # the first attempt failed and the task is parked behind its backoff
+    assert task.state == TASK_PENDING
+    assert task.next_attempt_at > time.time()
+    assert not task.due
+
+
+@pytest.mark.asyncio
+async def test_state_survives_dump_and_load(tmp_path):
+    """Plans/tasks round-trip through dump_state/load_state."""
+    manager, _, _ = build_manager(tmp_path)
+    await manager.start()
+    plan = await manager.submit("Persistenz")
+    for task in plan.tasks:
+        task.state = TASK_DONE
+        task.result = "ok"
+
+    data = manager.dump_state()
+
+    fresh = Manager(
+        MockBackend(),
+        Scratchpad(str(tmp_path / "notes2.jsonl")),
+        retry_backoff_base=0,
+    )
+    restored = fresh.load_state(data)
+    assert restored == len(plan.tasks)
+    assert set(fresh.tasks) == set(manager.tasks)
+    assert all(t.state == TASK_DONE for t in fresh.tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_load_state_requeues_inflight_tasks(tmp_path):
+    """A task that was running when HA stopped is put back to pending."""
+    manager, _, _ = build_manager(tmp_path)
+    await manager.start()
+    plan = await manager.submit("Neustart")
+    task = plan.tasks[0]
+    task.state = TASK_IN_PROGRESS
+    task.assigned_to = "worker_gone"
+
+    fresh = Manager(
+        MockBackend(), Scratchpad(str(tmp_path / "notes3.jsonl")), retry_backoff_base=0
+    )
+    fresh.load_state(manager.dump_state())
+
+    restored_task = fresh.tasks[task.task_id]
+    assert restored_task.state == TASK_PENDING
+    assert restored_task.assigned_to is None
