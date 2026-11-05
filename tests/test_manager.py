@@ -359,6 +359,43 @@ async def test_missing_answer_requeues_instead_of_faking_done(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_worker_that_never_becomes_ready_is_replaced(tmp_path):
+    """A sandbox that never answers readiness must be swapped out."""
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 1}]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True, max_parallel=1)
+    await manager.start()
+    backend.never_ready = True
+
+    plan = await manager.submit("Baue Feature R")
+    task = plan.tasks[0]
+    for _ in range(20):
+        await manager.tick()
+    # the broken instance was dropped and replaced by a fresh one
+    assert all(w.not_ready_ticks < manager.max_not_ready_ticks for w in manager.workers.values())
+    assert task.state == TASK_PENDING
+    assert len(backend.created) >= 2
+
+
+@pytest.mark.asyncio
+async def test_dead_send_fails_over_without_burning_retries(tmp_path):
+    """A delivery failure must not consume the task's retry budget."""
+    roles = [{"name": "coder", "tags": ["code", "research", "test", "review", "qa"], "instances": 1}]
+    manager, backend, _ = build_manager(tmp_path, roles=roles, lazy_pool=True, max_parallel=1)
+    await manager.start()
+    backend.fail_send_all = True
+
+    plan = await manager.submit("Baue Feature S")
+    task = plan.tasks[0]
+
+    for _ in range(12):
+        await manager.tick()
+    # the dead agent was replaced, the task is still alive (not failed)
+    assert task.state != TASK_FAILED
+    assert task.attempts == 0
+    assert len(backend.created) >= 2
+
+
+@pytest.mark.asyncio
 async def test_dead_worker_is_replaced_and_task_recovers(tmp_path):
     """A vanished agent must not block the role; a fresh one takes over."""
     roles = [

@@ -427,6 +427,12 @@ class MockBackend(BaseBackend):
         self.dead: set[str] = set()
         # when set, read_events only echoes the prompt (no agent answer)
         self.echo_only = False
+        # when set, is_ready() always returns False (sandbox never boots)
+        self.never_ready = False
+        # conversation ids for which send_task() raises (dead agent)
+        self.fail_send: set[str] = set()
+        # when set, send_task() always raises (dead agent from the start)
+        self.fail_send_all = False
 
     async def close(self) -> None:
         return None
@@ -443,8 +449,13 @@ class MockBackend(BaseBackend):
 
     async def send_task(self, worker: Worker, prompt: str) -> None:
         cid = str(worker.conversation_id)
+        if self.fail_send_all or cid in self.fail_send:
+            raise RuntimeError("mock send failed")
         self.prompts.setdefault(cid, []).append(prompt)
         self._poll_counts[cid] = 0
+
+    async def is_ready(self, worker: Worker) -> bool:
+        return not self.never_ready
 
     async def get_status(self, worker: Worker) -> dict[str, Any]:
         cid = str(worker.conversation_id)

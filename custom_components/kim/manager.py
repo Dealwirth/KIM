@@ -83,6 +83,7 @@ class Manager:
         self.lazy_pool = lazy_pool
         self.idle_worker_ttl = idle_worker_ttl
         self.max_status_errors = 3
+        self.max_not_ready_ticks = 8
         self.on_event = on_event
 
         self.workers: dict[str, Worker] = {}
@@ -341,14 +342,15 @@ class Manager:
 
         pending = [t for t in self.tasks.values() if t.state == TASK_PENDING]
         pending.sort(key=lambda t: t.created_at)
+        not_ready: set[str] = set()
         for task in pending:
             if free_slots <= 0:
                 break
             if not self._deps_done(task):
                 continue
-            idle = self._idle_workers()
+            idle = [w for w in self._idle_workers() if w.worker_id not in not_ready]
             if not idle:
-                break
+                continue
             worker = select_worker(
                 task, idle, self.registry, policy=self.policy, round_robin_cursor=self._rr_cursor
             )
@@ -358,8 +360,16 @@ class Manager:
             if not await self.backend.is_ready(worker):
                 # The agent is still booting / has not answered its readiness
                 # prompt. Sending now would let that reply be mistaken for the
-                # task's answer, so wait for the next tick.
+                # task's answer, so wait for the next tick. An agent that never
+                # becomes ready is replaced so it cannot eat the task's retries.
+                not_ready.add(worker.worker_id)
+                worker.not_ready_ticks += 1
+                if worker.not_ready_ticks >= self.max_not_ready_ticks:
+                    self._fail_worker(
+                        worker, "Agent wurde nicht bereit (Sandbox-Start fehlgeschlagen)"
+                    )
                 continue
+            worker.not_ready_ticks = 0
             await self._dispatch(task, worker)
             free_slots -= 1
 
@@ -371,7 +381,6 @@ class Manager:
         return True
 
     async def _dispatch(self, task: Task, worker: Worker) -> None:
-        task.attempts += 1
         task.state = TASK_ASSIGNED
         task.assigned_to = worker.worker_id
         task.touch()
@@ -391,12 +400,22 @@ class Manager:
         prompt = self._build_prompt(task, worker)
         try:
             await self.backend.send_task(worker, prompt)
-            task.state = TASK_IN_PROGRESS
         except Exception as err:  # noqa: BLE001
             _LOGGER.error("KIM: dispatch to %s failed: %s", worker.worker_id, err)
-            worker.state = STATE_IDLE
-            worker.current_task_id = None
-            self._requeue(task, f"Zustellung fehlgeschlagen: {err}")
+            # A failed delivery does not count as an attempt: the agent never
+            # ran the task. Repeated failures mean it is gone, so replace it
+            # instead of burning the task's retries on a dead sandbox.
+            worker.status_errors += 1
+            if worker.status_errors >= self.max_status_errors:
+                self._fail_worker(worker, f"Zustellung scheitert dauerhaft: {err}")
+            else:
+                worker.state = STATE_IDLE
+                worker.current_task_id = None
+                self._requeue(task, f"Zustellung fehlgeschlagen: {err}")
+            return
+        worker.status_errors = 0
+        task.attempts += 1
+        task.state = TASK_IN_PROGRESS
 
     def _build_prompt(self, task: Task, worker: Worker) -> str:
         deps = [self.tasks[d] for d in task.depends_on if d in self.tasks]

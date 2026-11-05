@@ -72,6 +72,7 @@ class Worker:
     failed_tasks: int = 0
     status_errors: int = 0
     result_errors: int = 0
+    not_ready_ticks: int = 0
     sandbox_status: str | None = None
     last_result: str | None = None
 
