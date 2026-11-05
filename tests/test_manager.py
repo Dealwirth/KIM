@@ -10,6 +10,7 @@ from custom_components.kim.const import (
     EVENT_TASK_DONE,
     STATE_IDLE,
     STATE_OFFLINE,
+    TASK_ASSIGNED,
     TASK_DONE,
     TASK_FAILED,
     TASK_IN_PROGRESS,
@@ -152,14 +153,17 @@ async def test_failover_on_offline_worker(tmp_path):
     assert task.state == TASK_IN_PROGRESS
 
     # simulate the agent going silent past the heartbeat timeout
-    worker = manager.workers[task.assigned_to]
+    old_id = task.assigned_to
+    worker = manager.workers[old_id]
     worker.last_heartbeat = 0
     manager.heartbeat_timeout = 0  # force the timeout check to trigger
     await manager.tick()
 
     assert worker.state == STATE_OFFLINE
-    assert task.assigned_to is None
-    assert task.state in (TASK_PENDING, TASK_FAILED)
+    assert old_id not in manager.workers
+    # failover hands the task to a fresh agent right away
+    assert task.assigned_to != old_id
+    assert task.state in (TASK_PENDING, TASK_ASSIGNED, TASK_IN_PROGRESS, TASK_FAILED)
 
 
 @pytest.mark.asyncio

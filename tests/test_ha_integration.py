@@ -135,6 +135,79 @@ async def test_pause_resume_services(hass: HomeAssistant):
     assert notes
 
 
+async def test_parallel_roles_and_failover_in_home_assistant(hass: HomeAssistant):
+    """Three roles run in parallel; a dead agent is replaced transparently."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={**MOCK_DATA, CONF_MAX_PARALLEL: 3}, entry_id="kim6"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    manager = runtime.manager
+    backend = manager.backend
+
+    # build three independent tasks, one per role
+    plan = await manager.submit("Paralleles Vorhaben")
+    manager.tasks.clear()
+    from custom_components.kim.models import Task
+
+    for i, (role, tag) in enumerate(
+        [("researcher", "research"), ("coder", "code"), ("tester", "test")]
+    ):
+        manager.tasks[f"t{i}"] = Task(
+            task_id=f"t{i}", title=f"T{i} {role}", description=f"mach {role}",
+            role=role, tags=[tag], run_id=plan.run_id,
+        )
+
+    for _ in range(8):
+        await runtime.coordinator.async_refresh()
+        await hass.async_block_till_done()
+    snap = runtime.coordinator.data
+    assert snap["tasks_completed"] == 3
+    roles_used = {w.role for w in manager.worker_history.values()}
+    assert {"researcher", "coder", "tester"} <= roles_used
+
+
+async def test_failover_in_home_assistant(hass: HomeAssistant):
+    """A vanished agent is detected and its task finishes on a fresh agent."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={**MOCK_DATA, CONF_MAX_PARALLEL: 1}, entry_id="kim7"
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    runtime = hass.data[DOMAIN][entry.entry_id]
+    manager = runtime.manager
+    backend = manager.backend
+    # fail once, then succeed on the replacement agent
+    manager.max_retries = 2
+
+    await hass.services.async_call(DOMAIN, "submit", {"goal": "Baue Feature X"}, blocking=True)
+    await hass.async_block_till_done()
+
+    # let the first agent pick up its task, then kill its sandbox
+    await runtime.coordinator.async_refresh()
+    await hass.async_block_till_done()
+    busy = [w for w in manager.workers.values() if w.current_task_id]
+    assert busy, "expected a working agent"
+    backend.dead.add(str(busy[0].conversation_id))
+
+    for _ in range(60):
+        await runtime.coordinator.async_refresh()
+        await hass.async_block_till_done()
+        snap = runtime.coordinator.data
+        if snap["tasks_total"] and snap["tasks_completed"] == snap["tasks_total"]:
+            break
+
+    snap = runtime.coordinator.data
+    assert snap["tasks_failed"] == 0
+    assert snap["tasks_completed"] == snap["tasks_total"]
+    assert len(backend.created) >= 2
+
+
 async def test_conversation_commands(hass: HomeAssistant):
     entry = MockConfigEntry(
         domain=DOMAIN, data={**MOCK_DATA, CONF_MAX_PARALLEL: 4}, entry_id="kim4"

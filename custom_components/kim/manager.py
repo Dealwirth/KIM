@@ -132,15 +132,34 @@ class Manager:
         return sum(1 for w in self.workers.values() if w.role == role_name)
 
     async def _ensure_capacity(self) -> None:
-        """Lazily grow the pool so pending work can be dispatched."""
-        if not self.lazy_pool:
-            return
+        """Grow or repair the pool so pending work can be dispatched."""
         pending = sorted(
             (t for t in self.tasks.values() if t.state == TASK_PENDING and self._deps_done(t)),
             key=lambda t: t.created_at,
         )
+        if not pending:
+            return
+        needed_roles = {self._preferred_role(t) for t in pending}
+        needed_roles.discard(None)
+
+        # In lazy mode the total number of agents is capped by max_parallel.
+        # A free agent of a role no pending task needs would occupy such a slot
+        # and block the role that is actually required, so retire it early.
+        # In eager mode the pool is sized by role instances instead.
+        pool_full = self.lazy_pool and len(self.workers) >= self.max_parallel
+        if pool_full:
+            for worker in sorted(self._idle_workers(), key=lambda w: w.last_heartbeat):
+                if worker.role not in needed_roles:
+                    await self.backend.stop_worker(worker)
+                    self.workers.pop(worker.worker_id, None)
+                    self.scratchpad.post(
+                        KIND_LOG, worker.worker_id, "beendet (Rolle nicht mehr benoetigt)"
+                    )
+                    pool_full = len(self.workers) >= self.max_parallel
+                    break
+
         for task in pending:
-            if len(self.workers) >= self.max_parallel:
+            if pool_full:
                 break
             role = self._preferred_role(task)
             if not role:
@@ -155,6 +174,7 @@ class Manager:
                 # One failing role must not block the rest of the pool; the
                 # next tick retries the spawn.
                 continue
+            pool_full = self.lazy_pool and len(self.workers) >= self.max_parallel
 
     def _preferred_role(self, task: Task) -> str | None:
         return self.registry.best_role(task) or (task.role or None)
@@ -306,9 +326,10 @@ class Manager:
         worker.last_error = reason
         self.scratchpad.post(KIND_LOG, worker.worker_id, f"Ausfall: {reason}")
         self._fire(EVENT_WORKER_OFFLINE, {"worker_id": worker.worker_id, "reason": reason})
-        # Drop the dead instance so a fresh one can take its place (failover).
-        if self.lazy_pool:
-            self.workers.pop(worker.worker_id, None)
+        # A dead instance is always dropped so a fresh one can take its place.
+        # In eager mode the coordinator restarts the whole pool on reload, but
+        # the running manager must not keep handing work to a dead agent.
+        self.workers.pop(worker.worker_id, None)
         if task_id and task_id in self.tasks:
             self._requeue(self.tasks[task_id], reason)
 

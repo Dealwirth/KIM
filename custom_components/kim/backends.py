@@ -328,7 +328,7 @@ class LocalBackend(BaseBackend):
             },
             "workspace": {"kind": "LocalWorkspace", "working_dir": self.workspace},
             "initial_message": {
-                "content": [{"text": f"Rolle: {role}. Warte auf Aufgaben."}],
+                "content": [{"text": f"Rolle: {role}. Melde dich bereit und warte auf Aufgaben."}],
                 "run": True,
             },
         }
