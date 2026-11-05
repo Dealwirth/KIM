@@ -12,6 +12,7 @@ from custom_components.kim.const import (
     STATE_IDLE,
     STATE_OFFLINE,
     TASK_ASSIGNED,
+    TASK_BLOCKED,
     TASK_DONE,
     TASK_FAILED,
     TASK_IN_PROGRESS,
@@ -530,3 +531,68 @@ async def test_load_state_requeues_inflight_tasks(tmp_path):
     restored_task = fresh.tasks[task.task_id]
     assert restored_task.state == TASK_PENDING
     assert restored_task.assigned_to is None
+
+
+@pytest.mark.asyncio
+async def test_failed_dependency_blocks_dependants(tmp_path):
+    """A dead predecessor must not leave dependants waiting forever."""
+    roles = [{"name": "research", "tags": ["research"], "instances": 1}]
+    backend = MockBackend(completion_delay=1, fail_roles={"research"})
+    pad = Scratchpad(str(tmp_path / "notes.jsonl"))
+    manager = Manager(
+        backend,
+        pad,
+        registry=RoleRegistry(roles),
+        max_parallel=2,
+        heartbeat_timeout=1000,
+        stall_timeout=1000,
+        lazy_pool=True,
+        idle_worker_ttl=0,
+        retry_backoff_base=0,
+        max_retries=0,
+    )
+    await manager.start()
+    plan = await manager.submit("Kette")
+    root, follow = plan.tasks[0], plan.tasks[1]
+    follow.depends_on = [root.task_id]
+
+    for _ in range(10):
+        await manager.tick()
+    assert root.state == TASK_FAILED
+    assert follow.state == TASK_BLOCKED
+
+    # retrying the root lifts the blocked dependant again
+    await manager.retry(root.task_id)
+    assert follow.state in (TASK_PENDING, TASK_ASSIGNED, TASK_IN_PROGRESS)
+
+
+@pytest.mark.asyncio
+async def test_blocking_cascades_through_a_chain(tmp_path):
+    """blocked a -> b -> c must propagate transitively."""
+    roles = [{"name": "research", "tags": ["research"], "instances": 1}]
+    backend = MockBackend(completion_delay=1, fail_roles={"research"})
+    pad = Scratchpad(str(tmp_path / "notes.jsonl"))
+    manager = Manager(
+        backend,
+        pad,
+        registry=RoleRegistry(roles),
+        max_parallel=3,
+        heartbeat_timeout=1000,
+        stall_timeout=1000,
+        lazy_pool=True,
+        idle_worker_ttl=0,
+        retry_backoff_base=0,
+        max_retries=0,
+    )
+    await manager.start()
+    plan = await manager.submit("Kette")
+    a, b, c = plan.tasks[0], plan.tasks[1], plan.tasks[2]
+    b.depends_on = [a.task_id]
+    c.depends_on = [b.task_id]
+
+    for _ in range(12):
+        await manager.tick()
+    assert a.state == TASK_FAILED
+    assert b.state == TASK_BLOCKED
+    assert c.state == TASK_BLOCKED
+

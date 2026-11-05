@@ -113,7 +113,7 @@ button.throne:disabled { filter: grayscale(0.6) brightness(0.7); cursor: default
 
 .hint { margin-top: 12px; color: var(--muted); font-size: 12.5px; }
 
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 22px 0; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 14px; margin: 22px 0; }
 .stat {
   border: 1px solid var(--line); border-radius: 18px; background: var(--glass);
   backdrop-filter: blur(10px); padding: 16px 18px; transition: border-color 0.3s, transform 0.3s;

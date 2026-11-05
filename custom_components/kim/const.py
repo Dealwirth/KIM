@@ -101,4 +101,5 @@ POLICY_ROUND_ROBIN = "round_robin"
 # Events fired on the HA bus
 EVENT_TASK_DONE = f"{DOMAIN}_task_done"
 EVENT_TASK_FAILED = f"{DOMAIN}_task_failed"
+EVENT_TASK_BLOCKED = f"{DOMAIN}_task_blocked"
 EVENT_WORKER_OFFLINE = f"{DOMAIN}_worker_offline"

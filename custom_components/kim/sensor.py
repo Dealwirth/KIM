@@ -63,6 +63,8 @@ class KimStatusSensor(_KimBaseSensor):
             return "working"
         if data.get("tasks_pending", 0) > 0:
             return "scheduling"
+        if data.get("tasks_blocked", 0) > 0:
+            return "blocked"
         return "idle"
 
     @property
@@ -76,6 +78,7 @@ class KimStatusSensor(_KimBaseSensor):
             "tasks_total": data.get("tasks_total", 0),
             "tasks_completed": data.get("tasks_completed", 0),
             "tasks_failed": data.get("tasks_failed", 0),
+            "tasks_blocked": data.get("tasks_blocked", 0),
             "tasks_pending": data.get("tasks_pending", 0),
         }
 

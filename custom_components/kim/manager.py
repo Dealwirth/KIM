@@ -21,6 +21,7 @@ from typing import Any, Callable
 
 from .backends import BackendError, BaseBackend
 from .const import (
+    EVENT_TASK_BLOCKED,
     EVENT_TASK_DONE,
     EVENT_TASK_FAILED,
     EVENT_WORKER_OFFLINE,
@@ -32,6 +33,7 @@ from .const import (
     STATE_STALLED,
     STATE_WORKING,
     TASK_ASSIGNED,
+    TASK_BLOCKED,
     TASK_CANCELLED,
     TASK_DONE,
     TASK_FAILED,
@@ -267,7 +269,7 @@ class Manager:
 
     async def retry(self, task_id: str) -> bool:
         task = self.tasks.get(task_id)
-        if task is None or task.state not in (TASK_FAILED, TASK_CANCELLED):
+        if task is None or task.state not in (TASK_FAILED, TASK_CANCELLED, TASK_BLOCKED):
             return False
         task.state = TASK_PENDING
         task.error = None
@@ -275,8 +277,29 @@ class Manager:
         task.attempts = 0
         task.next_attempt_at = 0.0
         task.touch()
+        self._unblock_dependants(task.task_id)
         await self.tick()
         return True
+
+    def _unblock_dependants(self, task_id: str) -> None:
+        """Lift tasks that were blocked by this one, transitively."""
+        changed = True
+        while changed:
+            changed = False
+            for task in self.tasks.values():
+                if task.state == TASK_BLOCKED and task_id in task.depends_on:
+                    task.state = TASK_PENDING
+                    task.error = None
+                    task.touch()
+                    self.scratchpad.post(
+                        KIND_LOG,
+                        "manager",
+                        "Aufgabe wieder freigegeben (Vorgaenger wird erneut versucht)",
+                        task_id=task.task_id,
+                    )
+                    task_id = task.task_id
+                    changed = True
+                    break
 
     def pause(self) -> None:
         self.paused = True
@@ -299,6 +322,7 @@ class Manager:
                 return
             await self._ensure_capacity()
             await self._reconcile()
+            self._block_orphans()
             await self._assign_ready_tasks()
             await self._reap_idle_workers()
 
@@ -422,6 +446,46 @@ class Manager:
             if dep_task is None or dep_task.state != TASK_DONE:
                 return False
         return True
+
+    def _block_orphans(self) -> None:
+        """Cascade a dead dependency: mark dependants ``blocked`` instead of
+        leaving them waiting forever on a predecessor that will never finish.
+
+        Runs until it reaches a fixed point so a chain ``a -> b -> c`` where
+        ``a`` failed also blocks ``b`` and then ``c``. Blocked tasks are not
+        terminal, so ``retry`` on the failed root lifts the whole chain.
+        """
+        changed = True
+        while changed:
+            changed = False
+            for task in self.tasks.values():
+                if task.state != TASK_PENDING:
+                    continue
+                for dep in task.depends_on:
+                    dep_task = self.tasks.get(dep)
+                    dead = dep_task is None or dep_task.state in (
+                        TASK_FAILED,
+                        TASK_CANCELLED,
+                        TASK_BLOCKED,
+                    )
+                    if dead:
+                        task.state = TASK_BLOCKED
+                        task.error = (
+                            f"Vorgaenger {dep} ist ausgefallen; Aufgabe blockiert"
+                        )
+                        task.touch()
+                        self.scratchpad.post(
+                            KIND_LOG,
+                            "manager",
+                            f"Aufgabe blockiert: {task.error}",
+                            task_id=task.task_id,
+                        )
+                        self._fire(
+                            EVENT_TASK_BLOCKED,
+                            {"task_id": task.task_id, "depends_on": dep},
+                        )
+                        changed = True
+                        break
 
     async def _dispatch(self, task: Task, worker: Worker) -> None:
         task.state = TASK_ASSIGNED
@@ -676,6 +740,7 @@ class Manager:
     def snapshot(self) -> dict[str, Any]:
         completed = sum(1 for t in self.tasks.values() if t.state == TASK_DONE)
         failed = sum(1 for t in self.tasks.values() if t.state == TASK_FAILED)
+        blocked = sum(1 for t in self.tasks.values() if t.state == TASK_BLOCKED)
         return {
             "paused": self.paused,
             "workers": [w.to_dict() for w in self.workers.values()],
@@ -686,6 +751,7 @@ class Manager:
             "tasks_total": len(self.tasks),
             "tasks_completed": completed,
             "tasks_failed": failed,
+            "tasks_blocked": blocked,
             "tasks_pending": sum(1 for t in self.tasks.values() if t.state == TASK_PENDING),
             "plans": [p.to_dict() for p in self.plans.values()],
             "notes": [n.to_dict() for n in self._visible_notes(25)],

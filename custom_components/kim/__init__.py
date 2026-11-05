@@ -6,7 +6,9 @@ supervised (assignment, heartbeat, failover) by a manager.
 """
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -25,7 +27,17 @@ PLATFORMS = ["sensor", "conversation"]
 __all__ = ["DOMAIN", "Manager", "KimRuntime", "async_setup", "async_setup_entry",
            "async_unload_entry"]
 
-MANIFEST_VERSION = "0.3.0"
+
+def _manifest_version() -> str:
+    """Version from manifest.json, used as a cache-buster for the panel assets."""
+    try:
+        raw = (Path(__file__).parent / "manifest.json").read_text(encoding="utf-8")
+        return str(json.loads(raw).get("version", "0"))
+    except Exception:  # noqa: BLE001 - a missing manifest must not block setup
+        return "0"
+
+
+MANIFEST_VERSION = _manifest_version()
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:

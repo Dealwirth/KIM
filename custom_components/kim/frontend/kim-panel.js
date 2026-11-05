@@ -161,6 +161,7 @@ class KimPanel extends HTMLElement {
             <div class="stat"><div class="v gold" id="s-running">0</div><div class="k">aktiv</div></div>
             <div class="stat"><div class="v" id="s-done">0</div><div class="k">fertig</div></div>
             <div class="stat"><div class="v" id="s-pending">0</div><div class="k">in Warteschlange</div></div>
+            <div class="stat" id="s-blocked-box" style="display:none"><div class="v" id="s-blocked" style="color:var(--warn)">0</div><div class="k">blockiert</div></div>
             <div class="stat"><div class="v" id="s-agents">0</div><div class="k">Agenten</div></div>
           </section>
 
@@ -243,6 +244,9 @@ class KimPanel extends HTMLElement {
     root.getElementById("s-done").textContent = data.tasks_completed || 0;
     root.getElementById("s-pending").textContent = data.tasks_pending || 0;
     root.getElementById("s-agents").textContent = data.worker_count || 0;
+    const blocked = data.tasks_blocked || 0;
+    root.getElementById("s-blocked-box").style.display = blocked ? "" : "none";
+    root.getElementById("s-blocked").textContent = blocked;
 
     const plans = data.plans || [];
     const plan = plans[plans.length - 1];
@@ -253,7 +257,7 @@ class KimPanel extends HTMLElement {
       tasksBox.innerHTML = `<div class="empty">Noch kein Auftrag. Oben eintippen und los.</div>`;
     } else {
       tasksBox.innerHTML = tasks.map((t) => {
-        const waiting = ["pending", "blocked"].includes(t.state) && (t.depends_on || []).length;
+        const waiting = t.state === "pending" && (t.depends_on || []).length;
         return `
         <div class="task" data-state="${esc(t.state)}">
           <div class="t"><span class="role">${esc(t.role || "?")}</span><span>${esc(t.title)}</span></div>

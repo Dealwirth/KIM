@@ -139,6 +139,10 @@ wird dadurch nie blockiert.
 - **Neustart-Festigkeit:** Pläne und Aufgaben werden in einem HA-`Store` gesichert.
   Nach einem Neustart werden sie geladen; Aufgaben, die beim Stopp liefen, gehen
   zurück auf `pending` und werden neu verteilt.
+- **Blockade-Kaskade:** Fällt eine Aufgabe endgültig aus, werden ihre Nachfolger
+  als `blockiert` markiert statt ewig auf einen toten Vorgänger zu warten. Das gilt
+  auch über eine ganze Kette (`a -> b -> c`). Ein `kim.retry` auf die Ursache hebt
+  die blockierten Nachfolger automatisch wieder auf `pending`.
 
 ## Entwicklung und Tests
 
