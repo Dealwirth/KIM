@@ -355,6 +355,11 @@ class KimRuntime:
             return self.manager.backend.status()
         return {"active": getattr(self.manager.backend, "backend", "?"), "chain": []}
 
+    def backend_is_degraded(self) -> bool:
+        """True when agents run on a fallback (mock/local) instead of the cloud."""
+        status = self._backend_status()
+        return bool(status.get("degraded")) or status.get("active") == BACKEND_MOCK
+
     async def _archive_run(self) -> dict[str, Any]:
         if self.archive is None:
             return {"ok": False, "error": "Archiv nicht verfuegbar"}

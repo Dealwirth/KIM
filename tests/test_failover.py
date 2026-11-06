@@ -206,3 +206,39 @@ async def test_websocket_unknown_entry_errors(hass, hass_ws_client):
     await client.send_json({"id": 9, "type": "kim/snapshot", "entry_id": "nope"})
     msg = await client.receive_json()
     assert not msg["success"]
+
+
+@pytest.mark.asyncio
+async def test_status_reports_degraded_when_cloud_exhausted():
+    """Exhausted cloud -> fallback active, degraded flag set with a reason."""
+    from custom_components.kim.backends import (
+        BACKEND_CLOUD,
+        BACKEND_MOCK,
+        FailoverBackend,
+        MockBackend,
+    )
+
+    class ExhaustedCloud(MockBackend):
+        async def start_worker(self, role, model, repository=None, branch=None):
+            raise RuntimeError("Daily sandbox limit of 20 reached")
+
+    chain = [(BACKEND_CLOUD, ExhaustedCloud()), (BACKEND_MOCK, MockBackend())]
+    backend = FailoverBackend(chain)
+    worker = await backend.start_worker("coder", "openhands/deepseek-v4.1-flash")
+    assert worker.backend == BACKEND_MOCK
+    status = backend.status()
+    assert status["degraded"] is True
+    assert status["active"] == BACKEND_MOCK
+    assert "sandbox limit" in (status["reason"] or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_status_not_degraded_on_cloud():
+    from custom_components.kim.backends import BACKEND_CLOUD, BACKEND_MOCK, FailoverBackend, MockBackend
+
+    chain = [(BACKEND_CLOUD, MockBackend()), (BACKEND_MOCK, MockBackend())]
+    backend = FailoverBackend(chain)
+    await backend.start_worker("coder", "openhands/deepseek-v4.1-flash")
+    status = backend.status()
+    assert status["degraded"] is False
+    assert status["active"] == BACKEND_CLOUD

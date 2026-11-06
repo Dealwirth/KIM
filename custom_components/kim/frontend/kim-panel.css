@@ -139,6 +139,9 @@ button.throne:disabled { filter: grayscale(0.6) brightness(0.7); cursor: default
   color: #ffb3bd; border-radius: 16px; padding: 14px 18px; margin-bottom: 18px;
   font-size: 13.5px; line-height: 1.45;
 }
+.alert.warn {
+  border-color: rgba(232,196,106,0.5); background: rgba(232,196,106,0.09); color: #f0d894;
+}
 
 button.ghost.wide { width: 100%; padding: 12px; }
 

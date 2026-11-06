@@ -232,9 +232,19 @@ class KimPanel extends HTMLElement {
     }[state] || state;
 
     const alert = root.getElementById("alert");
+    const backend = data.backend || {};
+    const degraded = backend.degraded || backend.active === "mock";
     if (data.config_error) {
       alert.style.display = "";
+      alert.className = "alert error";
       alert.textContent = data.config_error;
+    } else if (degraded) {
+      alert.style.display = "";
+      alert.className = "alert warn";
+      const why = backend.reason ? ` Grund: ${backend.reason}` : "";
+      alert.textContent =
+        `Achtung: Es laufen keine echten Agenten - aktiv ist '${backend.active}'.` +
+        `${why} Die Ergebnisse sind Simulationen. Cloud-Kontingent/Modell pruefen.`;
     } else {
       alert.style.display = "none";
     }

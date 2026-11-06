@@ -560,7 +560,9 @@ class MockBackend(BaseBackend):
             {
                 "kind": "MessageEvent",
                 "source": "assistant",
-                "text": f"mock result for {worker.role}",
+                "text": f"[SIMULATION] Kein echtes Ergebnis - der Mock-Backend hat "
+                f"stellvertretend fuer die Rolle '{worker.role}' geantwortet. "
+                f"Cloud-Kontingent pruefen oder Modell/API-Key korrigieren.",
                 "prompt": p,
             }
             for p in prompts
@@ -594,19 +596,26 @@ class FailoverBackend(BaseBackend):
         self.cooldown = cooldown
         self._cooldown_until: dict[str, float] = {}
         self._owner: dict[str, BaseBackend] = {}
+        # Reason the preferred backend was skipped, surfaced so the UI can say
+        # "the real agents are unavailable" instead of pretending all is well.
+        self._last_error: str | None = None
 
     # -- diagnostics ----------------------------------------------------
     def status(self) -> dict[str, Any]:
         """Which backend is active and which ones are cooling down."""
         now = time.monotonic()
+        active = self._active_name()
+        degraded = active != self.chain[0][0]
         return {
-            "active": self._active_name(),
+            "active": active,
             "chain": [name for name, _ in self.chain],
             "cooldowns": {
                 name: round(max(0.0, until - now))
                 for name, until in self._cooldown_until.items()
                 if until > now
             },
+            "degraded": degraded,
+            "reason": self._last_error if degraded else None,
         }
 
     def _active_name(self) -> str:
@@ -644,11 +653,18 @@ class FailoverBackend(BaseBackend):
                 worker = await backend.start_worker(role, model, repository, branch)
             except Exception as err:  # noqa: BLE001 - try the next backend
                 last_error = err
+                self._last_error = f"{name}: {err}"[:300]
                 if is_quota_error(err):
                     self._cool(name)
                 continue
             worker.backend = name
             self._owner[worker.worker_id] = backend
+            if name != self.chain[0][0]:
+                # We are on a fallback backend: keep the reason visible so the
+                # panel can warn that this is not a real agent run.
+                self._last_error = self._last_error or f"{name} statt {self.chain[0][0]}"
+            else:
+                self._last_error = None
             return worker
         if last_error is not None:
             raise last_error
