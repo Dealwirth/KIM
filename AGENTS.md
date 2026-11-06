@@ -55,8 +55,30 @@ docker run -d --name kim-ha --network host -v /tmp/ha-config:/config \
   `backend: mock` (kostet nichts, kein Cloud-Kontingent).
 - **Cloud-Tageslimit:** OpenHands Cloud erlaubt standardmäßig 20 Sandboxes pro Tag.
   Ist das Limit erreicht, liefert der Start-Task `status: ERROR` mit
-  „Daily sandbox limit of 20 reached". KIM überspringt dann nur die betroffene Rolle
-  und versucht es im nächsten Tick erneut – der Rest des Pools läuft weiter.
+  „Daily sandbox limit of 20 reached". KIM setzt den Cloud-Backend dann für eine
+  Stunde auf Cooldown und fällt auf den nächsten Backend zurück. **Wichtig:** Der
+  `FailoverBackend.status()` liefert `degraded` + `reason`; das Panel zeigt damit
+  eine deutliche Warnung. Ohne diese Warnung sähen Mock-Antworten wie echte
+  Agenten-Ergebnisse aus (das war die Ursache für „funktioniert nicht").
+- **Mock-Ergebnisse** sind mit `[SIMULATION]` gekennzeichnet, damit ein
+  degradierter Lauf nie für echte Agentenarbeit gehalten wird.
+- **Modell gesperrt:** Ist das Team nicht für ein Modell freigeschaltet, antwortet
+  der Start mit „team not allowed to access model". `is_model_error()` erkennt das,
+  der Manager stoppt das Spawnen (`_config_error`) statt endlos Sandboxes zu
+  erzeugen. Im Config-Flow gibt es deshalb ein Modell-Dropdown (`KNOWN_MODELS`).
+  Standard und einzig sicherer Wert: `openhands/deepseek-v4.1-flash`.
+- **Auto-Aufräumen:** `Manager.cleanup_when_idle` (in `runtime.py` aktiv) beendet
+  alle Agenten und löscht deren Konversationen, sobald keine Aufgabe mehr offen ist.
+  So bleibt das Tageskontingent für den nächsten Lauf frei.
+- **HA-Kontext:** `KimRuntime._home_context()` fasst echte Entitäten/Bereiche
+  zusammen und wird über `context_provider` an jeden Aufgaben-Prompt gehängt -
+  Agenten argumentieren mit echten Hausdaten statt zu raten.
+- **Archiv laden:** `kim/archive/load` ruft `Manager.restore_archive()` auf und
+  stellt Plan/Aufgaben wirklich wieder her (früher kam nur JSON zurück, das Panel
+  zeigte nichts).
 - Access-Token läuft ab: neu holen per `/auth/login_flow` → `/auth/token`. Der
   `authorization_code`-Grant braucht `Content-Type: application/x-www-form-urlencoded`
   (nicht JSON), sonst `unsupported_grant_type`.
+- **Nicht löschen:** Die 21 Konversationen in `app-conversations/search` sind eigene
+  Projekte des Nutzers (Durak, PV-Wärmepumpe …), nicht von KIM. Nur Einträge mit
+  Titel-Präfix `KIM ` stammen von KIM.
