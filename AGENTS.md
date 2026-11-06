@@ -99,3 +99,13 @@ docker run -d --name kim-ha --network host -v /tmp/ha-config:/config \
 - **Nicht löschen:** Die 21 Konversationen in `app-conversations/search` sind eigene
   Projekte des Nutzers (Durak, PV-Wärmepumpe …), nicht von KIM. Nur Einträge mit
   Titel-Präfix `KIM ` stammen von KIM.
+- **IP-Ban (403 auf alles):** Antwortet die Instanz auf **jeden** Pfad (auch `/`)
+  mit `403` und Body `403: Forbidden` (`Server: Python/* aiohttp/*`), ist das kein
+  KIM-Fehler, sondern Home Assistants IP-Sperre. Sie greift nach mehreren
+  Fehl-Logins (z. B. wenn ein abgelaufenes Token beim Neustart mehrfach benutzt
+  wird) und liegt persistent in `config/ip_bans.yaml`. **Wichtig:** Alle
+  OpenHands-Sandboxes teilen sich eine Egress-IP (`curl https://api.ipify.org`),
+  eine Sperre trifft also jeden Agenten. Entsperren: HA-Log nach „Banning IP
+  address" prüfen, `config/ip_bans.yaml` per SSH-/File-Editor-Add-on löschen, HA
+  neu starten. Vor Neustarts immer erst das Token erneuern (`ha_ws.login()`),
+  nie mit abgelaufenem Token arbeiten.
