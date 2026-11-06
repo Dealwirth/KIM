@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -53,6 +54,27 @@ def test_is_quota_error_matches_known_messages():
     assert is_quota_error("Daily sandbox limit of 20 reached")
     assert is_quota_error("HTTP 429 Too Many Requests")
     assert not is_quota_error("connection reset by peer")
+
+
+def test_daily_quota_cools_until_midnight():
+    """A daily limit must not be retried every hour.
+
+    Retrying hourly would burn the fresh allowance the moment it resets; the
+    cooldown has to reach past the next UTC midnight instead.
+    """
+    backend = FailoverBackend([("cloud", MockBackend()), ("mock", MockBackend())])
+    backend._cool_for_error("cloud", RuntimeError("Daily sandbox limit of 20 reached"))
+    remaining = backend._cooldown_until["cloud"] - time.monotonic()
+    assert remaining > 60
+    assert "cloud" in backend.status()["cooldowns"]
+
+
+def test_transient_quota_uses_short_cooldown():
+    """A 429-style blip should clear in about the normal cooldown window."""
+    backend = FailoverBackend([("cloud", MockBackend()), ("mock", MockBackend())], cooldown=120.0)
+    backend._cool_for_error("cloud", RuntimeError("HTTP 429 Too Many Requests"))
+    remaining = backend._cooldown_until["cloud"] - time.monotonic()
+    assert 100 < remaining <= 120
 
 
 @pytest.mark.asyncio

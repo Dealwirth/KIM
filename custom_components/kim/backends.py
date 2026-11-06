@@ -690,6 +690,21 @@ class FailoverBackend(BaseBackend):
     def _cool(self, name: str, seconds: float | None = None) -> None:
         self._cooldown_until[name] = time.monotonic() + (seconds if seconds is not None else self.cooldown)
 
+    def _cool_for_error(self, name: str, err: object) -> None:
+        """Cool a backend down; a daily quota lasts until the next UTC midnight.
+
+        A fixed one-hour cooldown would retry a *daily* sandbox limit every
+        hour and burn the allowance the moment it resets. Aligning with the
+        reset boundary keeps the backend idle exactly as long as needed.
+        """
+        text = str(err).lower()
+        if "daily" in text:
+            now = time.time()
+            midnight = (now // 86400 + 1) * 86400
+            self._cool(name, max(60.0, midnight - now + 30))
+        else:
+            self._cool(name)
+
     def _backend_for(self, worker: Worker) -> BaseBackend:
         owner = self._owner.get(worker.worker_id)
         if owner is not None:
@@ -717,7 +732,7 @@ class FailoverBackend(BaseBackend):
                 last_error = err
                 self._last_error = f"{name}: {err}"[:300]
                 if is_quota_error(err):
-                    self._cool(name)
+                    self._cool_for_error(name, err)
                 continue
             worker.backend = name
             self._owner[worker.worker_id] = backend
