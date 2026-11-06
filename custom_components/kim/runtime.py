@@ -356,17 +356,26 @@ class KimRuntime:
         }
 
     async def collect_all_artifacts(self) -> dict[str, Any]:
-        """Collect the workspace of every task that ran in the current plan."""
+        """Collect the workspace of every finished task of the current plan.
+
+        Tasks whose agent is already gone were saved by ``before_teardown`` at
+        the moment the sandbox was destroyed, so they are skipped instead of
+        reported as errors.
+        """
         assert self.manager is not None
         collected: list[dict[str, Any]] = []
+        skipped = 0
         for task in self.manager.tasks.values():
             if task.state != TASK_DONE:
+                continue
+            if self.manager.worker_for_task(task.task_id) is None:
+                skipped += 1
                 continue
             try:
                 collected.append(await self._collect_artifacts(task.task_id))
             except Exception as err:  # noqa: BLE001 - one bad task must not stop the rest
                 collected.append({"task_id": task.task_id, "error": str(err)[:200]})
-        return {"collected": collected}
+        return {"collected": collected, "skipped": skipped}
 
     async def _save_worker_workspace(self, worker: Worker) -> None:
         """Persist an agent's workspace before its sandbox is destroyed.

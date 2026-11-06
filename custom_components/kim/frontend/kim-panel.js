@@ -128,7 +128,9 @@ class KimPanel extends HTMLElement {
     const res = await this._send("kim/artifacts/collect");
     if (res) {
       const ok = (res.collected || []).filter((c) => !c.error).length;
-      this._toast(`${ok} Aufgabe(n) gesichert.`);
+      const skipped = res.skipped || 0;
+      const extra = skipped ? `, ${skipped} bereits beim Aufraeumen gesichert` : "";
+      this._toast(`${ok} Aufgabe(n) gesichert${extra}.`);
       this._refresh();
     }
   }
