@@ -76,6 +76,23 @@ docker run -d --name kim-ha --network host -v /tmp/ha-config:/config \
 - **Archiv laden:** `kim/archive/load` ruft `Manager.restore_archive()` auf und
   stellt Plan/Aufgaben wirklich wieder her (früher kam nur JSON zurück, das Panel
   zeigte nichts).
+- **Artefakte/PDF-Ausgabe:** Der Cloud-`/download`-Endpunkt liefert **nur das
+  Event-Transcript**, keine Workspace-Dateien. Echte Deliverables (PDFs, Reports)
+  kommen vom Sandbox-Agent-Server über `GET /api/file/download?path=<datei>` bzw.
+  `GET /api/file/archive?path=<ordner>&format=tar.gz` (Header `X-Session-API-Key`).
+  Der Workspace-Pfad steht im Konversations-Tag `archiveworkspacepath`
+  (meist `/workspace/project`) und wird beim Start in `Worker.workspace` gemerkt.
+  `fetch_file`/`fetch_archive` nutzen diese Endpunkte; `fetch_events_archive`
+  bleibt für Diagnose.
+- **Nichts geht mehr verloren:** `Manager.before_teardown` (von `runtime.py`
+  gesetzt) archiviert die Agent-Workspaces, **bevor** `cleanup_when_idle` die
+  Sandbox löscht. `_retire_worker()` ruft den Hook in allen Teardown-Pfaden
+  (idle, cleanup, stop) auf. Die Archive werden nach `config/www/kim/<task_id>/`
+  entpackt und über `/local/kim/<task_id>/...` ausgeliefert; die Dateiliste steht
+  im Snapshot unter `artifacts` und im Panel-Abschnitt „Ergebnisse".
+- **Ausgabe-Ordner:** Agenten werden im Prompt angewiesen, Deliverables unter
+  `OUTPUT_DIR` (`/workspace/project/output`) als echte Dateien abzulegen
+  (PDFs wirklich erzeugen, z. B. pandoc/reportlab).
 - Access-Token läuft ab: neu holen per `/auth/login_flow` → `/auth/token`. Der
   `authorization_code`-Grant braucht `Content-Type: application/x-www-form-urlencoded`
   (nicht JSON), sonst `unsupported_grant_type`.

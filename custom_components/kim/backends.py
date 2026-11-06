@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 
@@ -73,6 +74,9 @@ APP_CONVERSATIONS = "/api/v1/app-conversations"
 APP_SEND_MESSAGE = "/api/v1/app-conversations/{cid}/send-message"
 APP_EVENTS = "/api/v1/conversation/{cid}/events/search"
 APP_START_TASKS = "/api/v1/app-conversations/start-tasks"
+# Sandbox agent-server file access (X-Session-API-Key).
+AGENT_FILE_DOWNLOAD = "/api/file/download?path={path}"
+AGENT_FILE_ARCHIVE = "/api/file/archive?path={path}&format=tar.gz"
 
 
 class BackendError(RuntimeError):
@@ -131,6 +135,10 @@ class BaseBackend:
 
     async def fetch_archive(self, worker: Worker) -> bytes:
         """Read the whole workspace as a zip archive. Optional per backend."""
+        raise NotImplementedError
+
+    async def fetch_events_archive(self, worker: Worker) -> bytes:
+        """Read the event transcript as an archive. Optional per backend."""
         raise NotImplementedError
 
     async def stop_worker(self, worker: Worker) -> None:
@@ -302,6 +310,10 @@ class CloudBackend(BaseBackend):
             worker.session_api_key = session_key
         if conv_url and "/api/conversations" in conv_url:
             worker.agent_server_url = conv_url.rsplit("/api/conversations", 1)[0]
+        tags = record.get("tags") or {}
+        ws = tags.get("archiveworkspacepath")
+        if ws:
+            worker.workspace = ws
 
     async def send_task(self, worker: Worker, prompt: str) -> None:
         await self._post(
@@ -325,12 +337,39 @@ class CloudBackend(BaseBackend):
         )
         return [_flatten_event(e) for e in _items(data)]
 
+    async def _agent_get_bytes(self, worker: Worker, path: str) -> bytes:
+        """Download a file from the sandbox agent server (X-Session-API-Key).
+
+        The cloud app-server's ``/download`` only returns the event transcript,
+        not the workspace, so real deliverables (PDFs, reports) must be read
+        from the agent server directly.
+        """
+        if not worker.agent_server_url or not worker.session_api_key:
+            record = await self._conversation_record(str(worker.conversation_id))
+            self._apply_runtime_info(worker, record)
+        if not worker.agent_server_url or not worker.session_api_key:
+            raise BackendError("Agent-Server-Zugang fehlt (Sandbox noch nicht bereit)")
+        session = await self._get_session()
+        url = f"{worker.agent_server_url}{path}"
+        headers = {"X-Session-API-Key": worker.session_api_key}
+        async with session.get(url, headers=headers) as resp:
+            if resp.status >= 400:
+                body = (await resp.read())[:300]
+                raise BackendError(f"GET {path} -> {resp.status}: {body!r}")
+            return await resp.read()
+
     async def fetch_file(self, worker: Worker, path: str) -> bytes:
-        return await self._get_bytes(
-            f"{APP_CONVERSATIONS}/{worker.conversation_id}/file?file_path={path}"
-        )
+        return await self._agent_get_bytes(worker, AGENT_FILE_DOWNLOAD.format(path=quote(path, safe="")))
 
     async def fetch_archive(self, worker: Worker) -> bytes:
+        """Whole workspace as a gzip tarball (real files, not just events)."""
+        workspace = worker.workspace or "/workspace/project"
+        return await self._agent_get_bytes(
+            worker, AGENT_FILE_ARCHIVE.format(path=quote(workspace, safe=""))
+        )
+
+    async def fetch_events_archive(self, worker: Worker) -> bytes:
+        """Event transcript zip from the app server (diagnostics only)."""
         return await self._get_bytes(f"{APP_CONVERSATIONS}/{worker.conversation_id}/download")
 
     async def stop_worker(self, worker: Worker) -> None:
@@ -464,10 +503,19 @@ class LocalBackend(BaseBackend):
 
     async def fetch_file(self, worker: Worker, path: str) -> bytes:
         session = await self._get_session()
-        url = f"{self.base_url}/api/conversations/{worker.conversation_id}/files?path={path}"
+        url = f"{self.base_url}{AGENT_FILE_DOWNLOAD.format(path=quote(path, safe=''))}"
         async with session.get(url, headers=self._headers) as resp:
             if resp.status >= 400:
                 raise BackendError(f"fetch_file -> {resp.status}")
+            return await resp.read()
+
+    async def fetch_archive(self, worker: Worker) -> bytes:
+        session = await self._get_session()
+        workspace = worker.workspace or self.workspace
+        url = f"{self.base_url}{AGENT_FILE_ARCHIVE.format(path=quote(workspace, safe=''))}"
+        async with session.get(url, headers=self._headers) as resp:
+            if resp.status >= 400:
+                raise BackendError(f"fetch_archive -> {resp.status}")
             return await resp.read()
 
     async def stop_worker(self, worker: Worker) -> None:
@@ -572,7 +620,21 @@ class MockBackend(BaseBackend):
         return f"mock file {path} for {worker.role}".encode()
 
     async def fetch_archive(self, worker: Worker) -> bytes:
-        return b"PK\x03\x04mock-archive"
+        """A real tar.gz holding a sample deliverable, so the artifact path is
+        exercised end-to-end in tests instead of returning a fake prefix."""
+        import io
+        import tarfile
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for name, content in (
+                ("project/README.md", f"# Ergebnis von {worker.role}\n".encode()),
+                ("project/output/report.md", b"Bericht\n"),
+            ):
+                info = tarfile.TarInfo(name)
+                info.size = len(content)
+                tar.addfile(info, io.BytesIO(content))
+        return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +749,13 @@ class FailoverBackend(BaseBackend):
 
     async def fetch_archive(self, worker: Worker) -> bytes:
         return await self._backend_for(worker).fetch_archive(worker)
+
+    async def fetch_events_archive(self, worker: Worker) -> bytes:
+        backend = self._backend_for(worker)
+        try:
+            return await backend.fetch_events_archive(worker)
+        except NotImplementedError:
+            return await backend.fetch_archive(worker)
 
     async def stop_worker(self, worker: Worker) -> None:
         backend = self._owner.pop(worker.worker_id, None) or self._backend_for(worker)

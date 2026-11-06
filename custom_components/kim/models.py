@@ -75,6 +75,7 @@ class Worker:
     not_ready_ticks: int = 0
     sandbox_status: str | None = None
     last_result: str | None = None
+    workspace: str | None = None
 
     @property
     def online(self) -> bool:

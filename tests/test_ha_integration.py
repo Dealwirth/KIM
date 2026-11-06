@@ -285,5 +285,9 @@ async def test_artifact_services_write_files(hass: HomeAssistant):
         DOMAIN, "fetch_file", {"task_id": task_id, "path": "out/report.pdf"}, blocking=True
     )
     artifact_dir = hass.config.path("www/kim")
-    assert os.path.exists(os.path.join(artifact_dir, f"{task_id}.zip"))
+    # collect_artifacts unpacks the real workspace (tar.gz) into a per-task
+    # folder, so the mock's sample deliverables must be published as files.
+    unpacked = os.path.join(artifact_dir, task_id, "project", "output", "report.md")
+    assert os.path.exists(unpacked)
+    assert os.path.exists(os.path.join(artifact_dir, task_id, "project", "README.md"))
     assert os.path.exists(os.path.join(artifact_dir, "report.pdf"))

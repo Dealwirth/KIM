@@ -25,7 +25,7 @@ from custom_components.kim.scratchpad import Scratchpad
 
 def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
                   fail_roles=None, events=None, lazy_pool=False, idle_worker_ttl=0,
-                  cleanup_when_idle=False, context_provider=None):
+                  cleanup_when_idle=False, context_provider=None, before_teardown=None):
     backend = MockBackend(completion_delay=completion_delay, fail_roles=fail_roles)
     pad = Scratchpad(str(tmp_path / "notes.jsonl"))
     registry = RoleRegistry(roles)
@@ -47,6 +47,7 @@ def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
         on_event=on_event,
         cleanup_when_idle=cleanup_when_idle,
         context_provider=context_provider,
+        before_teardown=before_teardown,
     )
     return manager, backend, pad
 
@@ -616,6 +617,32 @@ async def test_cleanup_when_idle_retires_all_agents(tmp_path):
             break
     assert manager.workers == {}
     assert len(backend.created) > 0
+
+
+@pytest.mark.asyncio
+async def test_workspace_is_saved_before_teardown(tmp_path):
+    """The before_teardown hook fires for every agent that gets retired.
+
+    This is what preserves deliverables (PDFs, reports) when
+    ``cleanup_when_idle`` destroys the sandbox right after the last task.
+    """
+    saved: list[str] = []
+
+    async def hook(worker):
+        saved.append(worker.worker_id)
+
+    manager, backend, _ = build_manager(
+        tmp_path, lazy_pool=True, max_parallel=2, completion_delay=1,
+        cleanup_when_idle=True, before_teardown=hook,
+    )
+    await manager.start()
+    plan = await manager.submit("PDF erstellen")
+    for _ in range(60):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    assert manager.workers == {}
+    assert saved, "before_teardown must run before a sandbox is destroyed"
 
 
 @pytest.mark.asyncio

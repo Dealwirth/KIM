@@ -29,6 +29,13 @@ function ago(ts) {
   return `vor ${Math.floor(seconds / 3600)}h`;
 }
 
+function fmtBytes(n) {
+  const size = Number(n) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
 class KimPanel extends HTMLElement {
   constructor() {
     super();
@@ -116,6 +123,16 @@ class KimPanel extends HTMLElement {
     this._loadArchive();
   }
 
+  async _collectArtifacts() {
+    this._toast("Sammle Dateien der Agenten ...");
+    const res = await this._send("kim/artifacts/collect");
+    if (res) {
+      const ok = (res.collected || []).filter((c) => !c.error).length;
+      this._toast(`${ok} Aufgabe(n) gesichert.`);
+      this._refresh();
+    }
+  }
+
   _toast(text) {
     const el = this.shadowRoot.getElementById("toast");
     if (!el) return;
@@ -170,6 +187,13 @@ class KimPanel extends HTMLElement {
           </section>
 
           <section class="card">
+            <h2>Ergebnisse
+              <button class="ghost" id="collect" style="margin-left:auto">Dateien einsammeln</button>
+            </h2>
+            <div id="artifacts"><div class="empty">Noch keine Dateien.</div></div>
+          </section>
+
+          <section class="card">
             <h2>Verlauf
               <button class="ghost" id="archive-reload" style="margin-left:auto">Anzeigen</button>
             </h2>
@@ -200,6 +224,7 @@ class KimPanel extends HTMLElement {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) this._submit();
     });
     root.getElementById("archive-reload").addEventListener("click", () => this._loadArchive());
+    root.getElementById("collect").addEventListener("click", () => this._collectArtifacts());
     root.getElementById("detail-toggle").addEventListener("click", () => {
       this._detail = !this._detail;
       const box = root.getElementById("detail");
@@ -289,6 +314,25 @@ class KimPanel extends HTMLElement {
           <span class="st">${esc(STATE_LABEL[w.state] || w.state)}</span>
         </div>`).join("")
       : `<div class="empty">Keine Agenten aktiv.</div>`;
+
+    const arts = data.artifacts || [];
+    const artBox = root.getElementById("artifacts");
+    if (!arts.length) {
+      artBox.innerHTML = `<div class="empty">Noch keine Dateien. Nach dem Lauf "Dateien einsammeln".</div>`;
+    } else {
+      artBox.innerHTML = arts.map((a) => {
+        const files = (a.files || []);
+        const shown = files.slice(0, 12);
+        const more = files.length > shown.length ? `<div class="meta">+${files.length - shown.length} weitere</div>` : "";
+        return `
+        <div class="artifact">
+          <div class="t"><span class="role">${esc(a.role)}</span><span>${esc(a.title)}</span></div>
+          <div class="meta">${files.length} Datei(en) &middot; <a href="${esc(a.dir)}" target="_blank">Ordner oeffnen</a></div>
+          ${shown.map((f) => `<div class="file"><a href="${esc(f.url)}" target="_blank">${esc(f.path)}</a> <span class="sz">${fmtBytes(f.bytes)}</span></div>`).join("")}
+          ${more}
+        </div>`;
+      }).join("");
+    }
 
     const notes = (data.notes || []).slice(-14).reverse();
     const notesBox = root.getElementById("notes");

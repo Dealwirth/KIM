@@ -30,6 +30,7 @@ def _runtime(hass: HomeAssistant, entry_id: str | None):
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_snapshot)
     websocket_api.async_register_command(hass, ws_submit)
+    websocket_api.async_register_command(hass, ws_collect_artifacts)
     websocket_api.async_register_command(hass, ws_archive_list)
     websocket_api.async_register_command(hass, ws_archive_save)
     websocket_api.async_register_command(hass, ws_archive_load)
@@ -46,7 +47,21 @@ async def ws_snapshot(hass: HomeAssistant, connection, msg) -> None:
         return
     snapshot = runtime.manager.snapshot()
     snapshot["archive_target"] = runtime.archive.target if runtime.archive else "?"
+    snapshot["artifacts"] = runtime.artifacts_summary()
     connection.send_result(msg["id"], snapshot)
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "kim/artifacts/collect", vol.Optional("entry_id"): str}
+)
+@websocket_api.async_response
+async def ws_collect_artifacts(hass: HomeAssistant, connection, msg) -> None:
+    runtime = _runtime(hass, msg.get("entry_id"))
+    if runtime is None or runtime.manager is None:
+        connection.send_error(msg["id"], "not_loaded", "KIM ist nicht geladen")
+        return
+    result = await runtime.collect_all_artifacts()
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command(

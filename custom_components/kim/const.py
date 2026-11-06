@@ -60,6 +60,9 @@ DEFAULT_HEARTBEAT_TIMEOUT = 180
 DEFAULT_CLAIM_TTL = 900
 DEFAULT_STALL_TIMEOUT = 900
 DEFAULT_WORKSPACE = "/workspace"
+# Agents are told to write their deliverables here; KIM archives this folder
+# before a sandbox is torn down so PDFs/reports survive.
+OUTPUT_DIR = "/workspace/project/output"
 DEFAULT_MAX_RETRIES = 1
 # Base delay (seconds) before a failed task is retried; doubles each attempt up
 # to a cap. 0 disables the wait (used by the test suite).

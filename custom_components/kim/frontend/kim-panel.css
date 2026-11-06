@@ -193,6 +193,14 @@ footer { margin-top: 26px; text-align: center; color: #4e4b5c; font-size: 11.5px
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+.artifact { padding: 10px 0; border-top: 1px solid var(--line); }
+.artifact:first-child { border-top: none; }
+.artifact .file { display: flex; align-items: center; gap: 8px; padding: 3px 0 3px 12px; font-size: 12.5px; }
+.artifact .file a { color: var(--gold); text-decoration: none; overflow-wrap: anywhere; }
+.artifact .file a:hover { text-decoration: underline; }
+.artifact .sz { color: var(--muted, #8b8b98); font-size: 11.5px; margin-left: auto; }
+.artifact .meta a { color: var(--gold); }
+
 @media (max-width: 860px) {
   .grid { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }

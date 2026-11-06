@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from .backends import BackendError, BaseBackend, is_model_error
 from .const import (
@@ -25,6 +25,7 @@ from .const import (
     EVENT_TASK_DONE,
     EVENT_TASK_FAILED,
     EVENT_WORKER_OFFLINE,
+    OUTPUT_DIR,
     POLICY_AFFINITY,
     STATE_DONE,
     STATE_FAILED,
@@ -73,6 +74,7 @@ class Manager:
         on_event: EventCallback | None = None,
         context_provider: Callable[[], str] | None = None,
         cleanup_when_idle: bool = False,
+        before_teardown: Callable[[Worker], Awaitable[None]] | None = None,
     ) -> None:
         self.backend = backend
         self.scratchpad = scratchpad
@@ -97,6 +99,9 @@ class Manager:
         # Tear agents down as soon as no work is left instead of keeping paid
         # sandboxes alive, so a run costs nothing once it is finished.
         self.cleanup_when_idle = cleanup_when_idle
+        # Called right before an agent's sandbox is destroyed. Used to save the
+        # workspace (PDFs, reports) so cleanup never discards deliverables.
+        self.before_teardown = before_teardown
         # Set when the account cannot use the configured model; stops the pool
         # from repeatedly spawning doomed agents and shows up in the snapshot.
         self._config_error: str | None = None
@@ -211,6 +216,24 @@ class Manager:
     def _idle_workers_for(self, role: str) -> list[Worker]:
         return [w for w in self._idle_workers() if w.role == role]
 
+    async def _retire_worker(self, worker: Worker, note: str) -> None:
+        """Save the worker's deliverables, then stop it and forget it.
+
+        The before_teardown hook runs first so an agent's workspace (reports,
+        PDFs, generated code) is preserved before the sandbox disappears.
+        """
+        if self.before_teardown is not None:
+            try:
+                await self.before_teardown(worker)
+            except Exception as err:  # noqa: BLE001 - never block teardown
+                _LOGGER.warning("KIM: could not save workspace of %s: %s", worker.worker_id, err)
+        try:
+            await self.backend.stop_worker(worker)
+        except Exception:  # noqa: BLE001 - best effort teardown
+            pass
+        self.workers.pop(worker.worker_id, None)
+        self.scratchpad.post(KIND_LOG, worker.worker_id, note, role=worker.role)
+
     async def _reap_idle_workers(self) -> None:
         """Stop agent instances that have been idle past ``idle_worker_ttl``."""
         if not self.lazy_pool or self.idle_worker_ttl <= 0:
@@ -223,17 +246,15 @@ class Manager:
                 continue
             if now - worker.last_heartbeat < self.idle_worker_ttl:
                 continue
-            try:
-                await self.backend.stop_worker(worker)
-            except Exception:  # noqa: BLE001 - best effort
-                pass
-            self.workers.pop(worker.worker_id, None)
-            self.scratchpad.post(
-                KIND_LOG, worker.worker_id, "in den Ruhestand versetzt (idle)", role=worker.role
-            )
+            await self._retire_worker(worker, "in den Ruhestand versetzt (idle)")
 
     async def stop(self) -> None:
-        for worker in self.workers.values():
+        for worker in list(self.workers.values()):
+            if self.before_teardown is not None:
+                try:
+                    await self.before_teardown(worker)
+                except Exception:  # noqa: BLE001 - best effort shutdown
+                    pass
             try:
                 await self.backend.stop_worker(worker)
             except Exception:  # noqa: BLE001 - best effort shutdown
@@ -364,14 +385,7 @@ class Manager:
         if any(t.state == TASK_PENDING for t in self.tasks.values()):
             return
         for worker in list(self.workers.values()):
-            try:
-                await self.backend.stop_worker(worker)
-            except Exception:  # noqa: BLE001 - best effort teardown
-                pass
-            self.workers.pop(worker.worker_id, None)
-            self.scratchpad.post(
-                KIND_LOG, worker.worker_id, "beendet (Auftrag abgeschlossen)", role=worker.role
-            )
+            await self._retire_worker(worker, "beendet (Auftrag abgeschlossen)")
 
     def _heartbeat(self) -> None:
         for worker in self.workers.values():
@@ -598,6 +612,12 @@ class Manager:
             f"Bereits erledigte Vorgaenger:\n{dep_block}\n"
             f"{context_block}\n"
             f"Letzte Notizen aus dem gemeinsamen Notizzettel:\n{recent_notes}\n\n"
+            "WICHTIG - Ergebnisse als Dateien ablegen:\n"
+            f"- Schreibe jedes greifbare Ergebnis in den Ordner {OUTPUT_DIR} "
+            "(lege ihn an, falls noetig).\n"
+            "- Dokumente als Markdown (.md); wenn ein PDF verlangt ist, erzeuge "
+            "es wirklich (z. B. mit pandoc oder reportlab) und speichere es dort.\n"
+            "- Dateinamen sprechend waehlen (z. B. bericht.md, angebot.pdf).\n\n"
             "Arbeite die Aufgabe vollstaendig ab und antworte am Ende mit "
             "'ERLEDIGT: <kurzes Ergebnis>'."
         )
