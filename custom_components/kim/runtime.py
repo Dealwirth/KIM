@@ -118,6 +118,8 @@ class KimRuntime:
             backend,
             scratchpad,
             registry=registry,
+            context_provider=self._home_context,
+            cleanup_when_idle=True,
             model=options.get(CONF_MODEL, DEFAULT_MODEL),
             repository=options.get(CONF_REPOSITORY) or None,
             branch=options.get(CONF_BRANCH) or None,
@@ -132,6 +134,44 @@ class KimRuntime:
             retry_backoff_max=DEFAULT_RETRY_BACKOFF_MAX,
             on_event=on_event,
         )
+
+    # ------------------------------------------------------------------
+    def _home_context(self) -> str:
+        """A compact, real snapshot of Home Assistant for the agents.
+
+        Agents should reason about the actual house, not invent values, so the
+        most useful live data (entities, areas, notable states) is summarised
+        into a few lines and attached to every task prompt.
+        """
+        hass = self.hass
+        lines: list[str] = []
+        states = hass.states.async_all()
+        lines.append(f"Entitaeten gesamt: {len(states)}")
+        domains: dict[str, int] = {}
+        for state in states:
+            domain = state.entity_id.split(".", 1)[0]
+            domains[domain] = domains.get(domain, 0) + 1
+        top = sorted(domains.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        lines.append("Domains: " + ", ".join(f"{d}={c}" for d, c in top))
+        try:
+            from homeassistant.helpers import area_registry as ar
+
+            areas = ar.async_get(hass).async_list_areas()
+            if areas:
+                lines.append("Bereiche: " + ", ".join(a.name for a in areas[:20]))
+        except Exception:  # noqa: BLE001 - optional registry
+            pass
+        notable = [
+            s
+            for s in states
+            if s.domain in ("sensor", "binary_sensor", "climate", "light", "switch")
+            and s.state not in ("unknown", "unavailable")
+        ]
+        lines.append("Beispiel-Entitaeten:")
+        for state in notable[:25]:
+            unit = state.attributes.get("unit_of_measurement", "")
+            lines.append(f"  {state.entity_id} = {state.state} {unit}".rstrip())
+        return "\n".join(lines)
 
     async def async_start(self) -> None:
         self.manager = self._build_manager()
@@ -332,7 +372,15 @@ class KimRuntime:
         if self.archive is None:
             return {"ok": False, "error": "Archiv nicht verfuegbar"}
         data = await self.archive.load_run(name)
-        return {"ok": data is not None, "name": name, "run": data}
+        if data is None:
+            return {"ok": False, "name": name, "error": "Lauf nicht gefunden"}
+        restored = 0
+        if self.manager is not None:
+            restored = self.manager.restore_archive(data)
+            await self._async_persist()
+            if self.coordinator is not None:
+                await self.coordinator.async_request_refresh()
+        return {"ok": True, "name": name, "restored": restored, "run": data}
 
 
 def _write_bytes(path: str, content: bytes) -> None:

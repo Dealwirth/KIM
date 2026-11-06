@@ -45,10 +45,25 @@ QUOTA_MARKERS = (
     "insufficient",
 )
 
+# Markers for a model the account may not use. Retrying with the same model is
+# pointless, so the backend reports it instead of silently looping.
+MODEL_MARKERS = (
+    "not allowed to access model",
+    "team can only access models",
+    "model_not_found",
+    "unsupported model",
+    "invalid model",
+)
+
 
 def is_quota_error(err: object) -> bool:
     text = str(err).lower()
     return any(marker in text for marker in QUOTA_MARKERS)
+
+
+def is_model_error(err: object) -> bool:
+    text = str(err).lower()
+    return any(marker in text for marker in MODEL_MARKERS)
 
 
 # Sandbox agent-server event stream (X-Session-API-Key).
@@ -189,10 +204,16 @@ class CloudBackend(BaseBackend):
         if branch:
             payload["selected_branch"] = branch
 
-        start = await self._post(APP_CONVERSATIONS, payload)
-        app_conversation_id = start.get("app_conversation_id")
-        if not app_conversation_id:
-            app_conversation_id = await self._poll_start_task(str(start.get("id", "")))
+        try:
+            start = await self._post(APP_CONVERSATIONS, payload)
+            app_conversation_id = start.get("app_conversation_id")
+            if not app_conversation_id:
+                app_conversation_id = await self._poll_start_task(str(start.get("id", "")))
+        except Exception:
+            # A start that never produced a conversation can still have created
+            # a sandbox; sweep it so a broken config cannot pile up sandboxes.
+            await self._sweep_starts()
+            raise
 
         record = await self._conversation_record(app_conversation_id)
         worker = Worker(
@@ -209,16 +230,44 @@ class CloudBackend(BaseBackend):
 
         We wait for this before sending the first task, otherwise the "I am
         ready" reply can land *after* the task prompt and be mistaken for that
-        task's answer.
+        task's answer. A model/agent error is recorded on the worker so the
+        manager can stop respawning agents for a configuration that cannot work.
         """
         try:
             events = await self.read_events(worker, limit=10)
         except Exception:  # noqa: BLE001 - the sandbox may still be booting
             return False
+        for event in events:
+            if event.get("code") or event.get("detail"):
+                detail = str(event.get("detail") or "")
+                if is_model_error(detail):
+                    worker.last_error = detail[:300]
+                    return False
         return any(
             str(e.get("source") or "").lower() in ("assistant", "agent") and e.get("text")
             for e in events
         )
+
+    async def _sweep_starts(self) -> None:
+        """Delete start tasks that failed, releasing any sandbox they created."""
+        try:
+            data = await self._get(f"{APP_START_TASKS}/search?limit=20")
+        except Exception:  # noqa: BLE001 - best effort cleanup
+            return
+        for item in _items(data):
+            if item.get("status") == "ERROR":
+                cid = item.get("app_conversation_id")
+                if cid:
+                    await self._delete_conversation(str(cid))
+
+    async def _delete_conversation(self, cid: str) -> None:
+        try:
+            session = await self._get_session()
+            await session.delete(
+                f"{self.base_url}{APP_CONVERSATIONS}/{cid}", headers=self._auth_headers
+            )
+        except Exception:  # noqa: BLE001 - best effort cleanup
+            return
 
     async def _poll_start_task(self, start_task_id: str, timeout: float = 300.0) -> str:
         if not start_task_id:
@@ -230,7 +279,11 @@ class CloudBackend(BaseBackend):
                 if item.get("app_conversation_id"):
                     return str(item["app_conversation_id"])
                 if item.get("status") == "ERROR":
-                    raise BackendError(f"start task failed: {item.get('detail') or item}")
+                    detail = str(item.get("detail") or item)
+                    cid = item.get("app_conversation_id")
+                    if cid:
+                        await self._delete_conversation(str(cid))
+                    raise BackendError(f"start task failed: {detail}")
             await asyncio.sleep(3)
         raise BackendError("timed out waiting for start task")
 

@@ -113,5 +113,5 @@ async def ws_archive_load(hass: HomeAssistant, connection, msg) -> None:
     if runtime is None or runtime.archive is None:
         connection.send_error(msg["id"], "not_loaded", "KIM ist nicht geladen")
         return
-    data = await runtime.archive.load_run(msg["name"])
-    connection.send_result(msg["id"], {"ok": data is not None, "name": msg["name"], "run": data})
+    data = await runtime._archive_load_run(msg["name"])
+    connection.send_result(msg["id"], data)

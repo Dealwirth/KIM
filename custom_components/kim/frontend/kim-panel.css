@@ -31,7 +31,7 @@
     radial-gradient(900px 700px at 108% 12%, rgba(126, 108, 255, 0.10), transparent 60%),
     linear-gradient(180deg, var(--obsidian) 0%, var(--obsidian-2) 100%);
 }
-#shards { position: fixed; inset: 0; z-index: 1; opacity: 0.5; }
+#shards { position: fixed; inset: 0; z-index: 1; opacity: 0.75; }
 #grain {
   position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: 0.05;
   background-image: radial-gradient(rgba(255,255,255,0.5) 1px, transparent 1px);
@@ -123,13 +123,24 @@ button.throne:disabled { filter: grayscale(0.6) brightness(0.7); cursor: default
 .stat .k { margin-top: 4px; font-size: 11px; letter-spacing: 0.18em; color: var(--muted); text-transform: uppercase; }
 .stat .v.gold { color: var(--gold); }
 
-.grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; }
-.card { border: 1px solid var(--line); border-radius: 22px; background: var(--glass); backdrop-filter: blur(12px); padding: 20px; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+.card { border: 1px solid var(--line); border-radius: 22px; background: var(--glass); backdrop-filter: blur(12px); padding: 20px; margin-bottom: 18px; }
 .card h2 {
   margin: 0 0 16px; font-size: 12px; letter-spacing: 0.24em; text-transform: uppercase;
   color: var(--gold); font-weight: 600; display: flex; align-items: center; gap: 10px;
 }
 .card h2 .count { margin-left: auto; color: var(--muted); letter-spacing: 0.1em; font-weight: 400; }
+
+.sub { margin-top: 16px; }
+.sub h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+.alert {
+  border: 1px solid rgba(255,107,129,0.45); background: rgba(255,107,129,0.08);
+  color: #ffb3bd; border-radius: 16px; padding: 14px 18px; margin-bottom: 18px;
+  font-size: 13.5px; line-height: 1.45;
+}
+
+button.ghost.wide { width: 100%; padding: 12px; }
 
 .empty { color: var(--muted); font-size: 13.5px; padding: 14px 2px; }
 

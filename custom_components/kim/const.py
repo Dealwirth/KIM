@@ -37,6 +37,24 @@ BACKENDS = [BACKEND_AUTO, BACKEND_CLOUD, BACKEND_LOCAL, BACKEND_MOCK]
 # Defaults
 DEFAULT_BASE_URL = "https://app.all-hands.dev"
 DEFAULT_MODEL = "openhands/deepseek-v4.1-flash"
+
+# Models known to work on the OpenHands Cloud proxy for a standard account.
+# Offered as a dropdown so a locked model cannot be configured by accident.
+KNOWN_MODELS = [
+    "openhands/deepseek-v4.1-flash",
+    "openhands/deepseek-v4-flash",
+    "openhands/deepseek-v4-pro",
+    "openhands/deepseek-chat",
+    "openhands/kimi-k3",
+    "openhands/kimi-k2.7-code",
+    "openhands/minimax-m3",
+    "openhands/glm-5.2",
+    "openhands/qwen3-coder-next",
+    "openhands/gpt-5.6",
+    "openhands/claude-sonnet-5",
+    "openhands/gemini-3.8-flash",
+]
+
 DEFAULT_MAX_PARALLEL = 3
 DEFAULT_HEARTBEAT_TIMEOUT = 180
 DEFAULT_CLAIM_TTL = 900

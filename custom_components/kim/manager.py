@@ -19,7 +19,7 @@ import logging
 import time
 from typing import Any, Callable
 
-from .backends import BackendError, BaseBackend
+from .backends import BackendError, BaseBackend, is_model_error
 from .const import (
     EVENT_TASK_BLOCKED,
     EVENT_TASK_DONE,
@@ -71,6 +71,8 @@ class Manager:
         retry_backoff_base: float = 5.0,
         retry_backoff_max: float = 120.0,
         on_event: EventCallback | None = None,
+        context_provider: Callable[[], str] | None = None,
+        cleanup_when_idle: bool = False,
     ) -> None:
         self.backend = backend
         self.scratchpad = scratchpad
@@ -91,6 +93,13 @@ class Manager:
         self.max_status_errors = 3
         self.max_not_ready_ticks = 8
         self.on_event = on_event
+        self.context_provider = context_provider
+        # Tear agents down as soon as no work is left instead of keeping paid
+        # sandboxes alive, so a run costs nothing once it is finished.
+        self.cleanup_when_idle = cleanup_when_idle
+        # Set when the account cannot use the configured model; stops the pool
+        # from repeatedly spawning doomed agents and shows up in the snapshot.
+        self._config_error: str | None = None
 
         self.workers: dict[str, Worker] = {}
         self.worker_history: dict[str, Worker] = {}
@@ -119,11 +128,21 @@ class Manager:
 
     async def _spawn_worker(self, role_name: str) -> Worker | None:
         """Start a single agent instance for ``role_name`` (on demand)."""
+        if self._config_error:
+            return None
         try:
             worker = await self.backend.start_worker(
                 role_name, self.model, self.repository, self.branch
             )
         except Exception as err:  # noqa: BLE001
+            text = str(err)
+            if is_model_error(text):
+                # The configured model is not available to this account. Every
+                # further start would fail the same way, so stop respawning and
+                # surface it instead of burning sandbox quota.
+                self._config_error = f"Modell '{self.model}' nicht verfuegbar: {text[:200]}"
+                self.scratchpad.post(KIND_LOG, "manager", self._config_error)
+                self._fire(EVENT_WORKER_OFFLINE, {"reason": self._config_error})
             _LOGGER.error("KIM: could not start worker for role %s: %s", role_name, err)
             return None
         worker.touch()
@@ -235,6 +254,9 @@ class Manager:
                      plan_json: str | None = None) -> Plan:
         """Turn a natural-language goal into a plan and schedule it."""
         async with self._lock:
+            # A new submission is a fresh start: retry the pool even if a
+            # previous run gave up on a bad model config.
+            self._config_error = None
             plan = None
             if plan_json:
                 plan = parse_plan(plan_json, title=title or goal[:80])
@@ -325,6 +347,31 @@ class Manager:
             self._block_orphans()
             await self._assign_ready_tasks()
             await self._reap_idle_workers()
+            await self._cleanup_when_idle()
+
+    async def _cleanup_when_idle(self) -> None:
+        """Retire every agent once nothing is left to do.
+
+        Cloud sandboxes are billed per running instance, so as soon as the last
+        task reaches a terminal state all agents are stopped and their
+        conversations deleted. This also keeps the daily sandbox quota free for
+        the next run.
+        """
+        if not self.cleanup_when_idle or not self.lazy_pool:
+            return
+        if self._running_count() > 0:
+            return
+        if any(t.state == TASK_PENDING for t in self.tasks.values()):
+            return
+        for worker in list(self.workers.values()):
+            try:
+                await self.backend.stop_worker(worker)
+            except Exception:  # noqa: BLE001 - best effort teardown
+                pass
+            self.workers.pop(worker.worker_id, None)
+            self.scratchpad.post(
+                KIND_LOG, worker.worker_id, "beendet (Auftrag abgeschlossen)", role=worker.role
+            )
 
     def _heartbeat(self) -> None:
         for worker in self.workers.values():
@@ -429,6 +476,11 @@ class Manager:
                 # prompt. Sending now would let that reply be mistaken for the
                 # task's answer, so wait for the next tick. An agent that never
                 # becomes ready is replaced so it cannot eat the task's retries.
+                if worker.last_error and is_model_error(worker.last_error):
+                    self._config_error = f"Modell '{self.model}' nicht verfuegbar: {worker.last_error}"
+                    self.scratchpad.post(KIND_LOG, "manager", self._config_error)
+                    self._fail_worker(worker, self._config_error)
+                    continue
                 not_ready.add(worker.worker_id)
                 worker.not_ready_ticks += 1
                 if worker.not_ready_ticks >= self.max_not_ready_ticks:
@@ -532,11 +584,19 @@ class Manager:
             for n in self.scratchpad.read_recent(10)
             if n.kind in (KIND_LOG, KIND_RESULT, KIND_CLAIM)
         )
+        context = ""
+        if self.context_provider is not None:
+            try:
+                context = self.context_provider() or ""
+            except Exception:  # noqa: BLE001 - context is a bonus, never fatal
+                context = ""
+        context_block = f"\nAktuelle Home-Assistant-Daten (nutze sie als Fakten):\n{context}\n" if context else ""
         return (
             f"Du bist KIM-Agent mit Rolle '{worker.role}'.\n"
             f"Aufgabe ({task.task_id}): {task.title}\n"
             f"Beschreibung: {task.description}\n"
-            f"Bereits erledigte Vorgaenger:\n{dep_block}\n\n"
+            f"Bereits erledigte Vorgaenger:\n{dep_block}\n"
+            f"{context_block}\n"
             f"Letzte Notizen aus dem gemeinsamen Notizzettel:\n{recent_notes}\n\n"
             "Arbeite die Aufgabe vollstaendig ab und antworte am Ende mit "
             "'ERLEDIGT: <kurzes Ergebnis>'."
@@ -734,6 +794,32 @@ class Manager:
                 restored += 1
         return restored
 
+    def restore_archive(self, run: dict[str, Any] | None) -> int:
+        """Merge an archived run (``plans`` + ``notes``) back into the state.
+
+        Loading an old run used to only return its JSON, so the panel showed
+        nothing new. This actually brings the archived plans back so their
+        tasks appear again and finished work can be inspected or retried.
+        Returns the number of plans restored.
+        """
+        if not isinstance(run, dict):
+            return 0
+        restored = 0
+        for raw_plan in run.get("plans", []):
+            if not isinstance(raw_plan, dict):
+                continue
+            plan = Plan.from_dict(raw_plan)
+            self.plans[plan.plan_id] = plan
+            for task in plan.tasks:
+                task.run_id = plan.plan_id
+                if task.state in (TASK_ASSIGNED, TASK_IN_PROGRESS):
+                    task.state = TASK_PENDING
+                    task.assigned_to = None
+                    task.next_attempt_at = 0.0
+                self.tasks[task.task_id] = task
+            restored += 1
+        return restored
+
     # ------------------------------------------------------------------
     # reporting
     # ------------------------------------------------------------------
@@ -757,6 +843,7 @@ class Manager:
             "notes": [n.to_dict() for n in self._visible_notes(25)],
             "uptime": time.time() - self.started_at,
             "backend": self._backend_status(),
+            "config_error": self._config_error,
         }
 
     def _backend_status(self) -> dict[str, Any]:

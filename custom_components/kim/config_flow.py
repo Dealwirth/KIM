@@ -28,6 +28,7 @@ from .const import (
     DEFAULT_MODEL,
     DEFAULT_RETRY_BACKOFF,
     DOMAIN,
+    KNOWN_MODELS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,6 +55,19 @@ async def _validate_cloud(user_input: dict[str, Any]) -> dict[str, str]:
     return {}
 
 
+def _model_options(current: str | None) -> list[str]:
+    """Known models, always including the currently configured one.
+
+    A dropdown prevents picking a model the account cannot use (the mistake
+    that silently broke every agent), while still accepting a custom model
+    that was configured earlier.
+    """
+    options = list(KNOWN_MODELS)
+    if current and current not in options:
+        options.insert(0, current)
+    return options
+
+
 def _schema(defaults: dict[str, Any]) -> vol.Schema:
     """Only the few settings that matter. Everything else has sane defaults.
 
@@ -72,7 +86,9 @@ def _schema(defaults: dict[str, Any]) -> vol.Schema:
             vol.Optional(
                 CONF_LOCAL_URL, default=defaults.get(CONF_LOCAL_URL, "")
             ): str,
-            vol.Optional(CONF_MODEL, default=defaults.get(CONF_MODEL, DEFAULT_MODEL)): str,
+            vol.Optional(CONF_MODEL, default=defaults.get(CONF_MODEL, DEFAULT_MODEL)): vol.In(
+                _model_options(defaults.get(CONF_MODEL))
+            ),
             vol.Optional(
                 CONF_MAX_PARALLEL, default=defaults.get(CONF_MAX_PARALLEL, DEFAULT_MAX_PARALLEL)
             ): selector.NumberSelector(

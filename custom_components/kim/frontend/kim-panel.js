@@ -40,6 +40,7 @@ class KimPanel extends HTMLElement {
     this._sending = false;
     this._archive = [];
     this._built = false;
+    this._detail = false;
   }
 
   set panel(panel) {
@@ -139,62 +140,57 @@ class KimPanel extends HTMLElement {
             <div class="crown">${CROWN}</div>
             <div class="title">
               <h1>KIM</h1>
-              <p>Kuenstliche Intelligenz, die arbeitet. Du regierst, sie liefern.</p>
+              <p>Sag was zu tun ist. KIM verteilt die Arbeit.</p>
             </div>
             <div class="crest-right">
               <span class="pill" id="state-pill"><span class="dot" id="state-dot"></span><span id="state-text">verbinde ...</span></span>
-              <span class="pill" id="backend-pill" title="Aktives Backend">--</span>
             </div>
           </header>
 
+          <div class="alert" id="alert" style="display:none"></div>
+
           <section class="commission">
-            <label for="goal">Dein Auftrag</label>
             <div class="row">
               <textarea id="goal" rows="2"
-                placeholder="Beschreibe in einem Satz, was erledigt werden soll. KIM zerlegt es selbst und verteilt die Arbeit."></textarea>
-              <button class="throne" id="submit">Auftrag erteilen</button>
+                placeholder="Was soll erledigt werden? Ein Satz genuegt."></textarea>
+              <button class="throne" id="submit">Los</button>
             </div>
-            <div class="hint">Ein Satz genuegt. KIM plant, teilt auf, ueberwacht und faengt Ausfaelle selbst ab.</div>
           </section>
 
           <section class="stats">
-            <div class="stat"><div class="v gold" id="s-running">0</div><div class="k">aktiv</div></div>
+            <div class="stat"><div class="v gold" id="s-running">0</div><div class="k">laeuft</div></div>
             <div class="stat"><div class="v" id="s-done">0</div><div class="k">fertig</div></div>
-            <div class="stat"><div class="v" id="s-pending">0</div><div class="k">in Warteschlange</div></div>
-            <div class="stat" id="s-blocked-box" style="display:none"><div class="v" id="s-blocked" style="color:var(--warn)">0</div><div class="k">blockiert</div></div>
+            <div class="stat"><div class="v" id="s-pending">0</div><div class="k">wartet</div></div>
             <div class="stat"><div class="v" id="s-agents">0</div><div class="k">Agenten</div></div>
           </section>
 
-          <section class="grid">
-            <div>
-              <div class="card" style="margin-bottom:18px">
-                <h2>Aufgaben <span class="count" id="plan-name"></span></h2>
-                <div id="tasks"><div class="empty">Noch kein Auftrag. Oben eintippen und los.</div></div>
+          <section class="card">
+            <h2>Aufgaben <span class="count" id="plan-name"></span></h2>
+            <div id="tasks"><div class="empty">Noch kein Auftrag.</div></div>
+          </section>
+
+          <section class="card">
+            <h2>Verlauf
+              <button class="ghost" id="archive-reload" style="margin-left:auto">Anzeigen</button>
+            </h2>
+            <div id="archive"><div class="empty">Noch nichts gespeichert.</div></div>
+          </section>
+
+          <section class="card">
+            <button class="ghost wide" id="detail-toggle">Details anzeigen</button>
+            <div id="detail" style="display:none">
+              <div class="sub">
+                <h3>Agenten</h3>
+                <div id="agents"><div class="empty">Keine Agenten aktiv.</div></div>
               </div>
-            </div>
-            <div>
-              <div class="card" style="margin-bottom:18px">
-                <h2>Agenten <span class="count" id="agent-count"></span></h2>
-                <div id="agents"><div class="empty">Noch keine Agenten aktiv.</div></div>
-              </div>
-              <div class="card" style="margin-bottom:18px">
-                <h2>Notizzettel <span class="count" id="note-count"></span></h2>
-                <div id="notes"><div class="empty">Die Agenten schreiben hier ihre Absprachen.</div></div>
-              </div>
-              <div class="card">
-                <h2>Archiv
-                  <span class="archive-head" style="margin-left:auto">
-                    <span class="count" id="archive-target"></span>
-                    <button class="ghost" id="archive-save">Jetzt speichern</button>
-                    <button class="ghost" id="archive-reload">Anzeigen</button>
-                  </span>
-                </h2>
-                <div id="archive"><div class="empty">Laeufe werden ausserhalb von Home Assistant gespeichert.</div></div>
+              <div class="sub">
+                <h3>Notizen</h3>
+                <div id="notes"><div class="empty">Noch keine Notizen.</div></div>
               </div>
             </div>
           </section>
 
-          <footer>KIM &middot; KI-Manager &middot; gefertigt fuer Home Assistant</footer>
+          <footer>KIM &middot; KI-Manager</footer>
         </div>
         <div class="toast" id="toast"></div>
       </div>`;
@@ -203,8 +199,14 @@ class KimPanel extends HTMLElement {
     root.getElementById("goal").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) this._submit();
     });
-    root.getElementById("archive-save").addEventListener("click", () => this._saveArchive());
     root.getElementById("archive-reload").addEventListener("click", () => this._loadArchive());
+    root.getElementById("detail-toggle").addEventListener("click", () => {
+      this._detail = !this._detail;
+      const box = root.getElementById("detail");
+      box.style.display = this._detail ? "" : "none";
+      root.getElementById("detail-toggle").textContent =
+        this._detail ? "Details verbergen" : "Details anzeigen";
+    });
     this._startShards();
   }
 
@@ -216,23 +218,26 @@ class KimPanel extends HTMLElement {
     const button = root.getElementById("submit");
     if (button) {
       button.disabled = this._sending;
-      button.textContent = this._sending ? "Sendet ..." : "Auftrag erteilen";
+      button.textContent = this._sending ? "..." : "Los";
     }
     let state = "idle";
-    if (data.paused) state = "paused";
+    if (data.config_error) state = "error";
+    else if (data.paused) state = "paused";
     else if ((data.running_tasks || 0) > 0) state = "working";
     else if ((data.tasks_pending || 0) > 0) state = "scheduling";
-    const map = { idle: "ok", working: "work", scheduling: "warn", paused: "bad" };
+    const map = { idle: "ok", working: "work", scheduling: "warn", paused: "bad", error: "bad" };
     dot.className = `dot ${map[state] || ""}`;
-    text.textContent = { idle: "bereit", working: "arbeitet", scheduling: "plant", paused: "pausiert" }[state] || state;
+    text.textContent = {
+      idle: "bereit", working: "arbeitet", scheduling: "plant", paused: "pausiert", error: "Fehler",
+    }[state] || state;
 
-    const backend = data.backend || {};
-    const active = backend.active || "--";
-    const cooldowns = backend.cooldowns || {};
-    const cooling = Object.keys(cooldowns);
-    const pill = root.getElementById("backend-pill");
-    pill.textContent = cooling.length ? `${active} (${cooling.join(", ")} kuehlt)` : active;
-    pill.title = `Kette: ${(backend.chain || []).join(" -> ") || "-"}`;
+    const alert = root.getElementById("alert");
+    if (data.config_error) {
+      alert.style.display = "";
+      alert.textContent = data.config_error;
+    } else {
+      alert.style.display = "none";
+    }
   }
 
   _paint() {
@@ -244,9 +249,6 @@ class KimPanel extends HTMLElement {
     root.getElementById("s-done").textContent = data.tasks_completed || 0;
     root.getElementById("s-pending").textContent = data.tasks_pending || 0;
     root.getElementById("s-agents").textContent = data.worker_count || 0;
-    const blocked = data.tasks_blocked || 0;
-    root.getElementById("s-blocked-box").style.display = blocked ? "" : "none";
-    root.getElementById("s-blocked").textContent = blocked;
 
     const plans = data.plans || [];
     const plan = plans[plans.length - 1];
@@ -254,14 +256,14 @@ class KimPanel extends HTMLElement {
     root.getElementById("plan-name").textContent = plan ? plan.title : "";
     const tasksBox = root.getElementById("tasks");
     if (!tasks.length) {
-      tasksBox.innerHTML = `<div class="empty">Noch kein Auftrag. Oben eintippen und los.</div>`;
+      tasksBox.innerHTML = `<div class="empty">Noch kein Auftrag.</div>`;
     } else {
       tasksBox.innerHTML = tasks.map((t) => {
         const waiting = t.state === "pending" && (t.depends_on || []).length;
         return `
         <div class="task" data-state="${esc(t.state)}">
           <div class="t"><span class="role">${esc(t.role || "?")}</span><span>${esc(t.title)}</span></div>
-          <div class="meta">${esc(TASK_LABEL[t.state] || t.state)}${waiting ? " &middot; wartet auf Vorgaenger" : ""}${t.attempts ? ` &middot; Versuch ${t.attempts}` : ""}</div>
+          <div class="meta">${esc(TASK_LABEL[t.state] || t.state)}${waiting ? " &middot; wartet auf Vorgaenger" : ""}</div>
           ${t.result ? `<div class="res">${esc(String(t.result).slice(0, 400))}</div>` : ""}
           ${t.error ? `<div class="res" style="color:var(--bad)">${esc(String(t.error).slice(0, 240))}</div>` : ""}
         </div>`;
@@ -269,19 +271,16 @@ class KimPanel extends HTMLElement {
     }
 
     const workers = data.workers || [];
-    root.getElementById("agent-count").textContent = workers.length ? `${workers.length}` : "";
     const agentsBox = root.getElementById("agents");
     agentsBox.innerHTML = workers.length
       ? workers.map((w) => `
         <div class="agent">
           <span class="nm">${esc(w.role)}</span>
-          <span style="color:#5d5a6b;font-size:11.5px">${esc(w.worker_id.slice(-6))}</span>
           <span class="st">${esc(STATE_LABEL[w.state] || w.state)}</span>
         </div>`).join("")
-      : `<div class="empty">Noch keine Agenten aktiv.</div>`;
+      : `<div class="empty">Keine Agenten aktiv.</div>`;
 
     const notes = (data.notes || []).slice(-14).reverse();
-    root.getElementById("note-count").textContent = notes.length ? `${notes.length}` : "";
     const notesBox = root.getElementById("notes");
     notesBox.innerHTML = notes.length
       ? notes.map((n) => `
@@ -290,64 +289,113 @@ class KimPanel extends HTMLElement {
           <span class="when"> ${esc(ago(n.created_at))}</span>
           <div class="txt">${esc(String(n.text || "").slice(0, 300))}</div>
         </div>`).join("")
-      : `<div class="empty">Die Agenten schreiben hier ihre Absprachen.</div>`;
+      : `<div class="empty">Noch keine Notizen.</div>`;
   }
 
   _paintArchive() {
     const root = this.shadowRoot;
-    root.getElementById("archive-target").textContent = this._archiveTarget || "";
     const box = root.getElementById("archive");
     if (!this._archive.length) {
-      box.innerHTML = `<div class="empty">Noch keine Laeufe gespeichert.</div>`;
+      box.innerHTML = `<div class="empty">Noch nichts gespeichert.</div>`;
       return;
     }
     box.innerHTML = this._archive.slice(-12).reverse().map((r) => `
       <div class="run">
         <span>${esc(r.name)}</span>
         <span class="sz">${r.size ? `${Math.max(1, Math.round(r.size / 1024))} KB` : ""}</span>
+        <button class="ghost load" data-name="${esc(r.name)}">Laden</button>
       </div>`).join("");
+    box.querySelectorAll("button.load").forEach((btn) => {
+      btn.addEventListener("click", () => this._loadRun(btn.dataset.name));
+    });
   }
 
-  /* ---------- Hintergrund: langsam treibende Splitter ---------- */
+  async _loadRun(name) {
+    const res = await this._send("kim/archive/load", { name });
+    if (res && res.ok && res.run) {
+      this._toast(`Lauf '${name}' geladen.`);
+      this._refresh();
+    } else {
+      this._toast(`Lauf '${name}' konnte nicht geladen werden.`);
+    }
+  }
+
+  /* ---------- Hintergrund: System-of-a-Down-Energie ---------- */
   _startShards() {
     const canvas = this.shadowRoot.getElementById("shards");
     if (!canvas) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const ctx = canvas.getContext("2d");
     let w = 0, h = 0, dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const shards = [];
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const resize = () => {
       w = canvas.clientWidth; h = canvas.clientHeight;
       canvas.width = w * dpr; canvas.height = h * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
-    const make = () => ({
-      x: Math.random() * w, y: Math.random() * h,
-      r: 12 + Math.random() * 46,
-      a: Math.random() * Math.PI * 2,
-      spin: (Math.random() - 0.5) * 0.0016,
-      vx: (Math.random() - 0.5) * 0.16,
-      vy: (Math.random() - 0.5) * 0.16,
-      hue: Math.random() < 0.78 ? "232,196,106" : "150,140,255",
-      alpha: 0.05 + Math.random() * 0.14,
-    });
-
     resize();
-    for (let i = 0; i < 26; i++) shards.push(make());
     window.addEventListener("resize", resize);
 
+    const make = () => ({
+      x: Math.random() * w, y: Math.random() * h,
+      r: 14 + Math.random() * 60,
+      a: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 0.01,
+      vx: (Math.random() - 0.5) * 0.9,
+      vy: (Math.random() - 0.5) * 0.9,
+      hue: Math.random() < 0.6 ? "232,196,106" : "150,140,255",
+      alpha: 0.05 + Math.random() * 0.16,
+    });
+    const shards = [];
+    for (let i = 0; i < 34; i++) shards.push(make());
+
+    let t = 0;
+    let raf = null;
     const draw = () => {
+      t += reduced ? 0.004 : 0.016;
       ctx.clearRect(0, 0, w, h);
+
+      // 1. wogende Energiewellen (wie ein Bass-Puls)
+      const bands = 3;
+      for (let b = 0; b < bands; b++) {
+        ctx.beginPath();
+        const amp = 26 + b * 20 + Math.sin(t * 1.6 + b) * 14;
+        const speed = 0.9 + b * 0.5;
+        for (let x = 0; x <= w; x += 12) {
+          const y = h * (0.32 + b * 0.22)
+            + Math.sin(x * 0.006 * speed + t * (1.5 + b)) * amp
+            + Math.sin(x * 0.02 + t * 3) * (amp * 0.28);
+          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = b === 1
+          ? `rgba(232,196,106,${0.16 - b * 0.03})`
+          : `rgba(150,140,255,${0.14 - b * 0.03})`;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      }
+
+      // 2. pulsierendes Gitter
+      const gap = 46;
+      const glow = 0.03 + (Math.sin(t * 2.2) + 1) * 0.03;
+      ctx.strokeStyle = `rgba(232,196,106,${glow})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let x = 0; x <= w; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+      for (let y = 0; y <= h; y += gap) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+      ctx.stroke();
+
+      // 3. rotierende Splitter mit Leuchtspur
       for (const s of shards) {
         s.x += s.vx; s.y += s.vy; s.a += s.spin;
-        if (s.x < -80) s.x = w + 80; if (s.x > w + 80) s.x = -80;
-        if (s.y < -80) s.y = h + 80; if (s.y > h + 80) s.y = -80;
+        if (s.x < -90) s.x = w + 90; if (s.x > w + 90) s.x = -90;
+        if (s.y < -90) s.y = h + 90; if (s.y > h + 90) s.y = -90;
         ctx.save();
         ctx.translate(s.x, s.y);
         ctx.rotate(s.a);
         ctx.strokeStyle = `rgba(${s.hue},${s.alpha})`;
-        ctx.lineWidth = 1;
+        ctx.shadowColor = `rgba(${s.hue},0.5)`;
+        ctx.shadowBlur = 12;
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
         for (let i = 0; i < 3; i++) {
           const ang = (i / 3) * Math.PI * 2;
@@ -358,9 +406,16 @@ class KimPanel extends HTMLElement {
         ctx.stroke();
         ctx.restore();
       }
-      this._raf = requestAnimationFrame(draw);
+
+      // 4. gelegentlicher Glitch-Blitz
+      if (!reduced && Math.random() < 0.02) {
+        ctx.fillStyle = `rgba(255,${Math.floor(Math.random() * 120)},120,0.06)`;
+        ctx.fillRect(0, Math.random() * h, w, 2 + Math.random() * 6);
+      }
+      raf = requestAnimationFrame(draw);
     };
-    this._raf = requestAnimationFrame(draw);
+    raf = requestAnimationFrame(draw);
+    this._raf = raf;
   }
 }
 

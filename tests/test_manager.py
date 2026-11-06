@@ -24,7 +24,8 @@ from custom_components.kim.scratchpad import Scratchpad
 
 
 def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
-                  fail_roles=None, events=None, lazy_pool=False, idle_worker_ttl=0):
+                  fail_roles=None, events=None, lazy_pool=False, idle_worker_ttl=0,
+                  cleanup_when_idle=False, context_provider=None):
     backend = MockBackend(completion_delay=completion_delay, fail_roles=fail_roles)
     pad = Scratchpad(str(tmp_path / "notes.jsonl"))
     registry = RoleRegistry(roles)
@@ -44,6 +45,8 @@ def build_manager(tmp_path, *, max_parallel=2, roles=None, completion_delay=1,
         idle_worker_ttl=idle_worker_ttl,
         retry_backoff_base=0,
         on_event=on_event,
+        cleanup_when_idle=cleanup_when_idle,
+        context_provider=context_provider,
     )
     return manager, backend, pad
 
@@ -596,3 +599,118 @@ async def test_blocking_cascades_through_a_chain(tmp_path):
     assert b.state == TASK_BLOCKED
     assert c.state == TASK_BLOCKED
 
+
+
+@pytest.mark.asyncio
+async def test_cleanup_when_idle_retires_all_agents(tmp_path):
+    """Once no task is left, every agent is stopped and dropped."""
+    manager, backend, _ = build_manager(
+        tmp_path, lazy_pool=True, max_parallel=2, completion_delay=1,
+        cleanup_when_idle=True,
+    )
+    await manager.start()
+    plan = await manager.submit("Aufraeumen")
+    for _ in range(60):
+        await manager.tick()
+        if all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks):
+            break
+    assert manager.workers == {}
+    assert len(backend.created) > 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_keeps_agents_while_work_remains(tmp_path):
+    """An agent is not torn down while tasks are still pending."""
+    manager, backend, _ = build_manager(
+        tmp_path, lazy_pool=True, max_parallel=2, completion_delay=5,
+        cleanup_when_idle=True,
+    )
+    await manager.start()
+    plan = await manager.submit("Langes Werk")
+    await manager.tick()
+    assert manager.workers
+    assert not all(t.state in (TASK_DONE, TASK_FAILED) for t in plan.tasks)
+
+
+@pytest.mark.asyncio
+async def test_prompt_includes_home_context(tmp_path):
+    """The live Home Assistant summary reaches the agent prompt."""
+    manager, backend, _ = build_manager(
+        tmp_path, lazy_pool=True, max_parallel=2,
+        context_provider=lambda: "sensor.pv = 4.2 kW",
+    )
+    await manager.start()
+    await manager.submit("Kontext")
+    await manager.tick()
+    prompts = [p for plist in backend.prompts.values() for p in plist]
+    assert any("sensor.pv = 4.2 kW" in p for p in prompts)
+
+
+@pytest.mark.asyncio
+async def test_model_error_stops_respawning(tmp_path):
+    """A model the account cannot use must not spawn agents forever."""
+    from custom_components.kim.backends import MockBackend
+
+    backend = MockBackend(completion_delay=1)
+    backend.fail_start_roles = {"researcher", "coder", "tester", "reviewer"}
+
+    async def boom(role, model, repository=None, branch=None):
+        raise RuntimeError(
+            "team not allowed to access model. This team can only access "
+            "models=['deepseek-v4.1-flash']"
+        )
+
+    backend.start_worker = boom  # type: ignore[assignment]
+    pad = Scratchpad(str(tmp_path / "notes.jsonl"))
+    manager = Manager(
+        backend, pad, max_parallel=2, lazy_pool=True, retry_backoff_base=0,
+        heartbeat_timeout=1000, stall_timeout=1000,
+    )
+    await manager.start()
+    await manager.submit("Modelltest")
+    for _ in range(5):
+        await manager.tick()
+    assert manager._config_error
+    assert backend.created == []
+
+
+@pytest.mark.asyncio
+async def test_config_error_cleared_on_new_submit(tmp_path):
+    """A fresh submission retries the pool after a model error."""
+    manager, backend, _ = build_manager(tmp_path, lazy_pool=True, max_parallel=1)
+    manager._config_error = "Modell kaputt"
+    await manager.submit("Neuer Versuch")
+    assert manager._config_error is None
+
+
+def test_restore_archive_rebuilds_plans(tmp_path):
+    """Loading an archived run brings its plans and tasks back."""
+    manager, backend, _ = build_manager(tmp_path)
+    run = {
+        "plans": [
+            {
+                "plan_id": "plan_old",
+                "title": "Alter Lauf",
+                "tasks": [
+                    {"task_id": "t1", "title": "Recherche", "role": "researcher",
+                     "state": "done", "result": "alles klar"},
+                    {"task_id": "t2", "title": "Code", "role": "coder",
+                     "state": "in_progress", "assigned_to": "w_dead"},
+                ],
+            }
+        ],
+        "notes": [],
+    }
+    restored = manager.restore_archive(run)
+    assert restored == 1
+    assert "plan_old" in manager.plans
+    assert manager.tasks["t1"].state == TASK_DONE
+    # An archived in-flight task is re-queued, never left assigned to a dead agent.
+    assert manager.tasks["t2"].state == TASK_PENDING
+    assert manager.tasks["t2"].assigned_to is None
+
+
+def test_restore_archive_ignores_garbage(tmp_path):
+    manager, _, _ = build_manager(tmp_path)
+    assert manager.restore_archive(None) == 0
+    assert manager.restore_archive({"plans": ["nonsense"]}) == 0
